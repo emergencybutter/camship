@@ -1,0 +1,150 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p flycam-core
+      - run: cargo clippy --workspace --release -- -D warnings
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: lin
+            # Oldest supported runner, for the widest glibc compatibility.
+            os: ubuntu-22.04
+            targets: ""
+          - name: mac
+            os: macos-14
+            targets: aarch64-apple-darwin x86_64-apple-darwin
+          - name: win
+            os: windows-2022
+            targets: ""
+    runs-on: ${{ matrix.os }}
+    env:
+      # X-Plane 11 runs on macOS 10.15+; Apple Silicon starts at 11.0 regardless.
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build plugin
+        shell: bash
+        run: |
+          args=()
+          for t in ${{ matrix.targets }}; do args+=(--target "$t"); done
+          cargo xtask dist "${args[@]}"
+
+      - name: Inspect binary
+        shell: bash
+        run: |
+          f=dist/FlyCam/64/${{ matrix.name }}.xpl
+          ls -l "$f"
+          case "${{ matrix.name }}" in
+            lin)
+              # XPLM symbols stay undefined; X-Plane provides them at load time.
+              echo "undefined XPLM symbols: $(nm -D --undefined-only "$f" | grep -c ' XP')"
+              nm -D --defined-only "$f" | grep XPlugin ;;
+            mac)
+              lipo -info "$f"
+              nm -gU "$f" | grep XPlugin ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}.xpl
+          path: dist/FlyCam/64/${{ matrix.name }}.xpl
+          if-no-files-found: error
+
+  bundle:
+    needs: [test, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble the all-platform plugin folder
+        run: |
+          mkdir -p FlyCam/64
+          cp artifacts/*/*.xpl FlyCam/64/
+          cp src/packaging/README.txt FlyCam/README.txt
+          cp src/LICENSE FlyCam/LICENSE.txt
+          version=dev
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          sed "s/REPLACE_ME/$version/" src/packaging/skunkcrafts_updater.cfg > FlyCam/skunkcrafts_updater.cfg
+          ls -l FlyCam/64
+          zip -r FlyCam.zip FlyCam
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlyCam
+          path: FlyCam
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cp FlyCam.zip "FlyCam-$TAG.zip"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "FlyCam $TAG" --generate-notes
+          gh release upload "$TAG" "FlyCam-$TAG.zip" --clobber
+      # SkunkCrafts Updater reads the plugin folder plus its file lists from the
+      # `skunkcrafts` branch (see packaging/skunkcrafts_updater.cfg). Only stable
+      # tags are published there: anything with a "-" (v1.0.0-beta1) is skipped.
+      - name: Publish to the SkunkCrafts Updater branch
+        if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+        run: |
+          python3 - FlyCam <<'EOF'
+          import os, sys, zlib
+          root = sys.argv[1]
+          white, sizes = [], []
+          for d, _, files in os.walk(root):
+              for f in files:
+                  path = os.path.join(d, f)
+                  rel = os.path.relpath(path, root).replace(os.sep, "/")
+                  if rel.startswith("skunkcrafts_updater"):
+                      continue
+                  data = open(path, "rb").read()
+                  white.append(f"{rel}|{zlib.crc32(data)}")
+                  sizes.append(f"{rel}|{len(data)}")
+          for name, lines in (("whitelist", white), ("sizeslist", sizes)):
+              with open(os.path.join(root, f"skunkcrafts_updater_{name}.txt"), "w", newline="\n") as out:
+                  out.write("\n".join(sorted(lines)) + "\n")
+          EOF
+          cat FlyCam/skunkcrafts_updater_*.txt
+          cd src
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan skunkcrafts
+          git rm -rfq .
+          cp -r ../FlyCam/. .
+          git add -A
+          git commit -qm "SkunkCrafts release $GITHUB_REF_NAME"
+          git push -f origin skunkcrafts

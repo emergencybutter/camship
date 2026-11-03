@@ -1,0 +1,425 @@
+//! The shot list: what a camera ship and a ground crew would film for an
+//! aircraft commercial.
+//!
+//! Every distance is in *subject sizes* (roughly the wingspan), so the same
+//! shot frames a Cessna and a 747 alike. Offsets use the body frame: +x right
+//! wing, +y up, +z aft. Each shot moves during its take (dolly, crane, orbit,
+//! zoom creep); a static frame reads as a screenshot, not a commercial.
+
+use crate::math::Vec3;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Path {
+    /// The camera ship glides from `from` to `to`, holding formation in the
+    /// (slightly lagged) frame of the subject.
+    Line { from: Vec3, to: Vec3 },
+    /// An arc around the subject, kept level. Azimuth in degrees from the
+    /// nose, clockwise seen from above (90 = off the right wing).
+    Orbit { radius: f64, az_from: f64, az_to: f64, height_from: f64, height_to: f64 },
+    /// A photographer standing still (on the ground, or a hovering ship) at a
+    /// point ahead of the subject, beside its track, panning as it passes.
+    Flyby { side: f64, height: f64 },
+    /// A camera bolted to the airframe at `at` (in sizes, never distance-
+    /// scaled), aimed rigidly at the look point: it moves, pitches and
+    /// banks exactly with the aircraft.
+    Mount { at: Vec3 },
+    /// Directly above the subject on the world vertical, looking straight
+    /// down, nose at the top of the frame. Height in sizes.
+    Overhead { height_from: f64, height_to: f64 },
+}
+
+/// What the shot is built around.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Target {
+    /// Offsets are from the aircraft's reference point, in subject sizes.
+    Airframe,
+    /// Offsets are from one engine, in nacelle sizes (see
+    /// [`nacelle_size`]), with +x pointing outboard from that engine.
+    Engine {
+        /// Only engines clearly off the centreline (not a nose propeller,
+        /// where "behind the engine" is inside the cockpit).
+        outboard_only: bool,
+    },
+}
+
+/// Rough nacelle / propeller diameter for an aircraft `size` meters across:
+/// about 1.2 m on a Cessna, 2 m on an A320, 2.8 m on a 747.
+pub fn nacelle_size(size: f64) -> f64 {
+    0.35 * size.max(1.0).sqrt()
+}
+
+/// How shots are grouped in the settings window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    /// A camera plane flying with the subject.
+    CameraShip,
+    /// Tight shots on one part of the airframe.
+    CloseUp,
+    /// Mounted, overhead and fixed cameras.
+    Special,
+}
+
+impl Group {
+    pub const ALL: [Group; 3] = [Group::CameraShip, Group::CloseUp, Group::Special];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Group::CameraShip => "Camera plane",
+            Group::CloseUp => "Close-ups",
+            Group::Special => "Special cameras",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shot {
+    /// Stable identifier, used in the prefs file.
+    pub id: &'static str,
+    pub name: &'static str,
+    pub group: Group,
+    /// One line for the settings window.
+    pub blurb: &'static str,
+    pub path: Path,
+    pub target: Target,
+    /// Point on the subject the lens is aimed at, at the start and end of the take.
+    pub look_from: Vec3,
+    pub look_to: Vec3,
+    /// X-Plane zoom factor (1 = the user's normal field of view) at start and end.
+    pub zoom: (f64, f64),
+    /// Fixed camera roll in degrees, for a slightly tilted "Dutch" frame.
+    pub dutch: f64,
+    /// How much the camera banks with the subject (0 = horizon stays level).
+    pub bank_follow: f64,
+    pub in_air: bool,
+    pub on_ground: bool,
+    /// Required height above ground, in subject sizes.
+    pub min_agl: f64,
+    /// Required ground speed, m/s.
+    pub min_speed: f64,
+    /// The director may play this shot from the other side.
+    pub mirror: bool,
+    /// Relative probability of being picked.
+    pub weight: f64,
+}
+
+const fn v(x: f64, y: f64, z: f64) -> Vec3 {
+    Vec3::new(x, y, z)
+}
+
+const BASE: Shot = Shot {
+    id: "",
+    name: "",
+    group: Group::CameraShip,
+    blurb: "",
+    path: Path::Line { from: Vec3::ZERO, to: Vec3::ZERO },
+    target: Target::Airframe,
+    look_from: Vec3::ZERO,
+    look_to: Vec3::ZERO,
+    zoom: (1.0, 1.0),
+    dutch: 0.0,
+    bank_follow: 0.5,
+    in_air: true,
+    on_ground: true,
+    min_agl: 0.0,
+    min_speed: 0.0,
+    mirror: true,
+    weight: 1.0,
+};
+
+pub const CATALOG: &[Shot] = &[
+    Shot {
+        id: "rear_quarter",
+        name: "Rear-quarter reveal",
+        group: Group::CameraShip,
+        blurb: "Slides up from behind the wing to abeam",
+        path: Path::Line { from: v(-0.9, 0.12, 1.5), to: v(-1.2, 0.22, 0.35) },
+        look_from: v(0.0, 0.0, 0.05),
+        look_to: v(0.0, 0.0, -0.05),
+        zoom: (1.15, 1.35),
+        weight: 1.2,
+        ..BASE
+    },
+    Shot {
+        id: "abeam",
+        name: "Formation abeam",
+        group: Group::CameraShip,
+        blurb: "Formation off the wing, sliding forward",
+        path: Path::Line { from: v(1.6, 0.06, 0.7), to: v(1.6, 0.12, -0.7) },
+        look_from: v(0.0, 0.0, 0.1),
+        look_to: v(0.0, 0.0, -0.1),
+        zoom: (1.5, 1.6),
+        bank_follow: 0.8,
+        on_ground: false,
+        min_agl: 0.5,
+        ..BASE
+    },
+    Shot {
+        id: "hero_nose",
+        name: "Hero front quarter",
+        group: Group::CameraShip,
+        blurb: "Low ahead of the nose, slight tilt, push-in",
+        path: Path::Line { from: v(0.6, -0.1, -1.4), to: v(0.85, -0.02, -1.15) },
+        look_from: v(0.0, 0.0, -0.15),
+        look_to: v(0.0, 0.0, -0.15),
+        zoom: (1.25, 1.55),
+        dutch: 5.0,
+        bank_follow: 0.4,
+        ..BASE
+    },
+    Shot {
+        id: "head_on",
+        name: "Head-on",
+        group: Group::CameraShip,
+        blurb: "Ahead, looking back at the nose",
+        // Flying ahead of the nose, looking back, slowly letting it catch up.
+        path: Path::Line { from: v(0.15, 0.12, -2.4), to: v(0.25, 0.08, -1.9) },
+        look_from: v(0.0, 0.0, -0.2),
+        look_to: v(0.0, 0.0, -0.2),
+        zoom: (1.3, 1.45),
+        bank_follow: 0.6,
+        weight: 1.1,
+        ..BASE
+    },
+    Shot {
+        id: "overtake_nose",
+        name: "Overtake across the nose",
+        group: Group::CameraShip,
+        blurb: "Overtakes and crosses ahead of the nose",
+        // From behind the left wing, overtaking and crossing ahead to the right.
+        path: Path::Line { from: v(-1.2, 0.1, 0.5), to: v(0.45, 0.1, -1.9) },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, -0.2),
+        zoom: (1.2, 1.3),
+        bank_follow: 0.6,
+        weight: 1.0,
+        ..BASE
+    },
+    Shot {
+        id: "overtake_above",
+        name: "Overtake above",
+        group: Group::CameraShip,
+        blurb: "Passes slowly over, from behind to ahead",
+        // Passing over from behind to ahead; slightly off-centre so the lens
+        // never points straight down.
+        path: Path::Line { from: v(0.25, 0.5, 1.7), to: v(0.25, 0.55, -1.7) },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, -0.1),
+        zoom: (1.15, 1.15),
+        bank_follow: 0.6,
+        on_ground: false,
+        min_agl: 2.0,
+        weight: 0.9,
+        ..BASE
+    },
+    Shot {
+        id: "wingtip",
+        name: "Wingtip cam",
+        group: Group::Special,
+        blurb: "Camera bolted to the wingtip",
+        // Bolted just above the right wingtip, wide lens, looking in at the
+        // fuselage and cockpit.
+        path: Path::Mount { at: v(0.48, 0.04, 0.06) },
+        look_from: v(0.0, 0.06, -0.12),
+        look_to: v(0.0, 0.06, -0.12),
+        zoom: (0.85, 0.85),
+        bank_follow: 0.0,
+        weight: 0.9,
+        ..BASE
+    },
+    Shot {
+        id: "straight_down",
+        name: "Top-down",
+        group: Group::Special,
+        blurb: "Straight down, aircraft centred",
+        path: Path::Overhead { height_from: 1.6, height_to: 2.1 },
+        zoom: (1.0, 1.0),
+        bank_follow: 0.0,
+        mirror: false,
+        weight: 0.8,
+        ..BASE
+    },
+    Shot {
+        id: "top_down",
+        name: "Overhead pass",
+        group: Group::CameraShip,
+        blurb: "High above, aircraft overtakes the camera",
+        path: Path::Line { from: v(0.1, 1.4, -0.9), to: v(0.1, 1.4, 1.1) },
+        look_from: v(0.0, 0.0, -0.2),
+        look_to: v(0.0, 0.0, 0.2),
+        zoom: (1.1, 1.1),
+        bank_follow: 0.7,
+        on_ground: false,
+        min_agl: 2.0,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
+        id: "orbit",
+        name: "Slow orbit",
+        group: Group::CameraShip,
+        blurb: "Level arc around the aircraft",
+        path: Path::Orbit { radius: 1.7, az_from: 210.0, az_to: 330.0, height_from: 0.25, height_to: 0.4 },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.2, 1.2),
+        bank_follow: 0.3,
+        ..BASE
+    },
+    Shot {
+        id: "belly",
+        name: "Under the wing",
+        group: Group::CameraShip,
+        blurb: "Looking up from under the wing",
+        path: Path::Line { from: v(-0.5, -0.75, 1.0), to: v(-0.35, -0.6, 0.25) },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, -0.1),
+        zoom: (1.15, 1.15),
+        dutch: -3.0,
+        bank_follow: 0.6,
+        on_ground: false,
+        min_agl: 3.0,
+        weight: 0.6,
+        ..BASE
+    },
+    Shot {
+        id: "tail",
+        name: "Tail detail",
+        group: Group::CloseUp,
+        blurb: "Tight on the fin",
+        path: Path::Line { from: v(-0.55, 0.4, 1.0), to: v(-0.4, 0.32, 0.8) },
+        look_from: v(0.0, 0.12, 0.42),
+        look_to: v(0.0, 0.14, 0.4),
+        zoom: (2.0, 2.4),
+        dutch: 3.0,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
+        id: "engine",
+        name: "Wing detail",
+        group: Group::CloseUp,
+        blurb: "Tight on the inboard wing",
+        path: Path::Line { from: v(0.95, 0.12, -0.35), to: v(0.85, 0.15, 0.05) },
+        look_from: v(0.28, -0.04, -0.08),
+        look_to: v(0.3, -0.03, -0.04),
+        zoom: (2.0, 2.3),
+        dutch: -2.0,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
+        id: "engine_front",
+        name: "Engine: intake",
+        group: Group::CloseUp,
+        blurb: "Engine intake or propeller, from ahead",
+        path: Path::Line { from: v(1.2, -0.4, -3.6), to: v(0.8, -0.25, -2.8) },
+        target: Target::Engine { outboard_only: false },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.2),
+        zoom: (1.4, 1.55),
+        dutch: 3.0,
+        weight: 0.6,
+        ..BASE
+    },
+    Shot {
+        id: "engine_side",
+        name: "Engine: nacelle side",
+        group: Group::CloseUp,
+        blurb: "Along the engine, from outboard",
+        // Outboard and a little below, under the wing, sliding front to back.
+        path: Path::Line { from: v(3.2, -0.5, -1.2), to: v(3.2, -0.4, 1.2) },
+        target: Target::Engine { outboard_only: false },
+        look_from: v(0.0, 0.0, -0.2),
+        look_to: v(0.0, 0.0, 0.3),
+        zoom: (1.4, 1.4),
+        weight: 0.6,
+        ..BASE
+    },
+    Shot {
+        id: "engine_rear",
+        name: "Engine: exhaust",
+        group: Group::CloseUp,
+        blurb: "Engine exhaust, from behind",
+        path: Path::Line { from: v(1.0, -0.5, 3.6), to: v(0.7, -0.35, 2.8) },
+        target: Target::Engine { outboard_only: true },
+        look_from: v(0.0, 0.0, 0.2),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.4, 1.55),
+        dutch: -3.0,
+        weight: 0.5,
+        ..BASE
+    },
+    Shot {
+        id: "engine_below",
+        name: "Engine: from below",
+        group: Group::CloseUp,
+        blurb: "Looking up at the engine",
+        path: Path::Line { from: v(0.6, -3.0, -1.0), to: v(0.8, -2.6, 0.8) },
+        target: Target::Engine { outboard_only: false },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.4, 1.4),
+        on_ground: false,
+        min_agl: 1.0,
+        weight: 0.4,
+        ..BASE
+    },
+    Shot {
+        id: "long_lens",
+        name: "Long-lens chase",
+        group: Group::CameraShip,
+        blurb: "Far behind, long telephoto",
+        path: Path::Line { from: v(0.25, 0.08, 6.0), to: v(0.3, 0.14, 5.0) },
+        look_from: v(0.0, 0.0, -0.1),
+        look_to: v(0.0, 0.0, -0.1),
+        zoom: (4.0, 4.6),
+        bank_follow: 0.8,
+        weight: 0.8,
+        ..BASE
+    },
+    Shot {
+        id: "crane",
+        name: "Crane up from behind",
+        group: Group::CameraShip,
+        blurb: "Rises from tail height to a high rear view",
+        path: Path::Line { from: v(0.0, -0.02, 1.7), to: v(0.05, 0.85, 1.25) },
+        look_from: v(0.0, 0.0, -0.3),
+        look_to: v(0.0, 0.0, -0.1),
+        zoom: (1.2, 1.2),
+        bank_follow: 0.3,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
+        id: "flyby",
+        name: "Flyby",
+        group: Group::Special,
+        blurb: "Photographer by the track, aircraft passes",
+        path: Path::Flyby { side: 1.8, height: 0.15 },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.5, 1.3),
+        bank_follow: 0.0,
+        min_speed: 25.0,
+        weight: 0.8,
+        ..BASE
+    },
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_unique_and_prefs_safe() {
+        for (i, a) in CATALOG.iter().enumerate() {
+            assert!(a.id.chars().all(|c| c.is_ascii_lowercase() || c == '_'), "{}", a.id);
+            assert!(CATALOG[i + 1..].iter().all(|b| b.id != a.id), "duplicate {}", a.id);
+        }
+    }
+
+    #[test]
+    fn some_shot_works_anywhere() {
+        assert!(CATALOG.iter().any(|s| s.in_air && s.on_ground && s.min_agl == 0.0 && s.min_speed == 0.0));
+    }
+}
