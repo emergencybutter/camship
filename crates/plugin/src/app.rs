@@ -82,6 +82,7 @@ struct Refs {
     engine_z: Option<DataRef>,
     sun_heading: Option<DataRef>,
     sun_pitch: Option<DataRef>,
+    fov: Option<DataRef>,
 }
 
 impl Refs {
@@ -109,6 +110,7 @@ impl Refs {
             engine_z: f("sim/flightmodel2/engines/location_z_mtr"),
             sun_heading: f("sim/graphics/scenery/sun_heading_degrees"),
             sun_pitch: f("sim/graphics/scenery/sun_pitch_degrees"),
+            fov: f("sim/graphics/view/field_of_view_deg"),
         }
     }
 
@@ -439,6 +441,9 @@ impl App {
         let subject = self.refs.subject(self.size);
         if let (Some(h), Some(p)) = (self.refs.sun_heading, self.refs.sun_pitch) {
             self.director.set_sun(h.f32() as f64, p.f32() as f64);
+        }
+        if let Some(fov) = self.refs.fov {
+            self.director.set_fov(fov.f32() as f64);
         }
         let probe = self.probe.as_ref();
         let mut ground = |p: Vec3| probe.and_then(|pr| pr.ground_y(p.x, p.y, p.z));

@@ -37,6 +37,8 @@ const SUN_MIN_ELEVATION: f64 = -6.0;
 const SUN_MAX_ELEVATION: f64 = 60.0;
 /// Below this difference in how much each side faces the sun, either will do.
 const SUN_MIN_DIFFERENCE: f64 = 0.15;
+/// X-Plane's default horizontal field of view, for when it can't be read.
+const DEFAULT_FOV_DEG: f64 = 60.0;
 
 /// What the director needs to know about the aircraft, in world coordinates.
 #[derive(Clone, Copy, Debug)]
@@ -111,6 +113,8 @@ pub struct Director {
     engines: Vec<Vec3>,
     /// Unit vector towards the sun, world frame, when it's worth framing.
     sun: Option<Vec3>,
+    /// The user's horizontal field of view, degrees (X-Plane's zoom 1).
+    fov_deg: f64,
 }
 
 impl Director {
@@ -131,6 +135,7 @@ impl Director {
             requested_take: None,
             engines: Vec::new(),
             sun: None,
+            fov_deg: DEFAULT_FOV_DEG,
         }
     }
 
@@ -185,6 +190,22 @@ impl Director {
     /// Engine shots are only picked when this is not empty.
     pub fn set_engines(&mut self, engines: Vec<Vec3>) {
         self.engines = engines;
+    }
+
+    /// The user's horizontal field of view in degrees, so shots with a fixed
+    /// lens (`fov_deg`) get the same picture whatever it's set to.
+    pub fn set_fov(&mut self, fov_deg: f64) {
+        self.fov_deg = if fov_deg.is_finite() && (10.0..=170.0).contains(&fov_deg) { fov_deg } else { DEFAULT_FOV_DEG };
+    }
+
+    /// The X-Plane zoom for a shot at progress `e`.
+    fn zoom(&self, shot: &Shot, e: f64) -> f64 {
+        let zoom = match shot.fov_deg {
+            // Zoom scales the focal length: tan(fov / 2) shrinks by 1 / zoom.
+            Some(fov) => (self.fov_deg / 2.0).to_radians().tan() / (fov.clamp(10.0, 170.0) / 2.0).to_radians().tan(),
+            None => lerp(shot.zoom.0, shot.zoom.1, e),
+        };
+        (zoom * self.settings.zoom_scale).max(0.1)
     }
 
     /// Where the sun is: true heading and elevation, degrees. Two-sided shots
@@ -318,7 +339,7 @@ impl Director {
             heading: frame.heading.rem_euclid(360.0),
             pitch: -90.0,
             roll: 0.0,
-            zoom: (lerp(shot.zoom.0, shot.zoom.1, ease_in_out(self.progress(take))) * self.settings.zoom_scale).max(0.1),
+            zoom: self.zoom(shot, ease_in_out(self.progress(take))),
         }
     }
 
@@ -341,7 +362,7 @@ impl Director {
             heading: world.heading.rem_euclid(360.0),
             pitch: world.pitch.clamp(-89.9, 89.9),
             roll: world.roll,
-            zoom: (lerp(shot.zoom.0, shot.zoom.1, e) * self.settings.zoom_scale).max(0.1),
+            zoom: self.zoom(shot, e),
         }
     }
 
@@ -789,6 +810,17 @@ mod tests {
         for sun in [Some((0.0, -30.0)), Some((0.0, 80.0)), None] {
             let share = sunward_share(sun);
             assert!((0.42..=0.58).contains(&share), "{sun:?}: {share}");
+        }
+    }
+
+    #[test]
+    fn wingtip_lens_is_120_degrees_whatever_the_user_fov() {
+        for (user_fov, zoom_scale) in [(60.0, 1.0), (90.0, 1.0), (75.0, 1.3)] {
+            let mut d = Director::new(Settings { zoom_scale, ..only("wingtip") }, 1);
+            d.set_fov(user_fov);
+            let pose = d.update(&cruising(0.0), DT, &mut flat);
+            let fov = 2.0 * ((user_fov / 2.0_f64).to_radians().tan() / (pose.zoom / zoom_scale)).atan().to_degrees();
+            assert!((fov - 120.0).abs() < 1e-6, "user {user_fov}: {fov}");
         }
     }
 

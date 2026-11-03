@@ -87,6 +87,9 @@ pub struct Shot {
     pub look_to: Vec3,
     /// X-Plane zoom factor (1 = the user's normal field of view) at start and end.
     pub zoom: (f64, f64),
+    /// A fixed horizontal field of view in degrees, whatever the user's own
+    /// FOV setting is (an ultra-wide action camera). Replaces `zoom`.
+    pub fov_deg: Option<f64>,
     /// Fixed camera roll in degrees, for a slightly tilted "Dutch" frame.
     pub dutch: f64,
     /// How much the camera banks with the subject (0 = horizon stays level).
@@ -117,6 +120,7 @@ const BASE: Shot = Shot {
     look_from: Vec3::ZERO,
     look_to: Vec3::ZERO,
     zoom: (1.0, 1.0),
+    fov_deg: None,
     dutch: 0.0,
     bank_follow: 0.5,
     in_air: true,
@@ -218,13 +222,15 @@ pub const CATALOG: &[Shot] = &[
         group: Group::Special,
         blurb: "Insta360-style, just ahead of the wingtip",
         // An action camera on a stick a foot or two ahead of the right
-        // wingtip's leading edge, ultra-wide, looking back in at the fuselage
-        // and cockpit. The tip is ~half a span out; the stick is in meters so
-        // it's the same real length on every aircraft.
+        // wingtip's leading edge, ultra-wide, looking back in at the fuselage.
+        // The tip is ~half a span out; the stick is in meters so it's the
+        // same real length on every aircraft. From there the nose and tail
+        // are up to ~55 degrees either side of the fuselage, so the lens
+        // takes in 120 degrees to show the whole aircraft.
         path: Path::Mount { at: v(0.5, 0.03, -0.02), offset_m: v(0.0, 0.1, -1.1) },
-        look_from: v(0.0, 0.06, -0.08),
-        look_to: v(0.0, 0.06, -0.08),
-        zoom: (0.75, 0.75),
+        look_from: v(0.0, 0.06, 0.04),
+        look_to: v(0.0, 0.06, 0.04),
+        fov_deg: Some(120.0),
         bank_follow: 0.0,
         weight: 0.9,
         ..BASE
