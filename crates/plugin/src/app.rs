@@ -80,6 +80,8 @@ struct Refs {
     engine_x: Option<DataRef>,
     engine_y: Option<DataRef>,
     engine_z: Option<DataRef>,
+    sun_heading: Option<DataRef>,
+    sun_pitch: Option<DataRef>,
 }
 
 impl Refs {
@@ -105,6 +107,8 @@ impl Refs {
             engine_x: f("sim/flightmodel2/engines/location_x_mtr"),
             engine_y: f("sim/flightmodel2/engines/location_y_mtr"),
             engine_z: f("sim/flightmodel2/engines/location_z_mtr"),
+            sun_heading: f("sim/graphics/scenery/sun_heading_degrees"),
+            sun_pitch: f("sim/graphics/scenery/sun_pitch_degrees"),
         }
     }
 
@@ -433,6 +437,9 @@ impl App {
         let dt = self.last_time.map_or(0.0, |t| (now - t).max(0.0));
         self.last_time = Some(now);
         let subject = self.refs.subject(self.size);
+        if let (Some(h), Some(p)) = (self.refs.sun_heading, self.refs.sun_pitch) {
+            self.director.set_sun(h.f32() as f64, p.f32() as f64);
+        }
         let probe = self.probe.as_ref();
         let mut ground = |p: Vec3| probe.and_then(|pr| pr.ground_y(p.x, p.y, p.z));
         Some(self.director.update(&subject, dt, &mut ground))

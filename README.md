@@ -73,6 +73,7 @@ What makes it feel filmed rather than computed:
 - **Eased moves and zoom creep.** Every take starts and stops its dolly gently.
 - **Safety.** The camera never goes below terrain (probed every frame) plus 2 m. It also stays at least half a wingspan from the aircraft's reference point. Belly and overhead shots are only picked when the aircraft is high enough. Shots that stop fitting, for example a belly shot on short final, are cut early.
 - **Variety.** Shots are picked at random by weight. The last three shots are never repeated.
+- **Golden hour.** Shots that work from either side pick one at random, but three times out of four they take the side that puts the sun behind the aircraft, so sunrises and sunsets end up in the frame. This only applies when the sun is between 6° below the horizon and 60° up; at night, or with the sun high overhead, either side is equally likely.
 
 ### Preferences
 

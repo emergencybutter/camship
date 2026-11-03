@@ -29,6 +29,14 @@ const RECENT: usize = 3;
 const MIN_RANGE: f64 = 0.5;
 /// Eye height of a photographer standing beside the runway, meters.
 const EYE_HEIGHT_M: f64 = 1.7;
+/// How often a two-sided shot is filmed from the side that faces the sun.
+const SUN_BIAS: f64 = 0.75;
+/// The sun is used for picking a side only from this far below the horizon
+/// (twilight still glows) up to this high, degrees.
+const SUN_MIN_ELEVATION: f64 = -6.0;
+const SUN_MAX_ELEVATION: f64 = 60.0;
+/// Below this difference in how much each side faces the sun, either will do.
+const SUN_MIN_DIFFERENCE: f64 = 0.15;
 
 /// What the director needs to know about the aircraft, in world coordinates.
 #[derive(Clone, Copy, Debug)]
@@ -101,6 +109,8 @@ pub struct Director {
     requested_take: Option<f64>,
     /// Engine positions in the body frame, meters from the reference point.
     engines: Vec<Vec3>,
+    /// Unit vector towards the sun, world frame, when it's worth framing.
+    sun: Option<Vec3>,
 }
 
 impl Director {
@@ -120,6 +130,7 @@ impl Director {
             requested: None,
             requested_take: None,
             engines: Vec::new(),
+            sun: None,
         }
     }
 
@@ -176,6 +187,19 @@ impl Director {
         self.engines = engines;
     }
 
+    /// Where the sun is: true heading and elevation, degrees. Two-sided shots
+    /// then favour the side that puts the sun behind the aircraft, so sunrises
+    /// and sunsets end up in the frame.
+    pub fn set_sun(&mut self, heading: f64, elevation: f64) {
+        self.sun = (heading.is_finite()
+            && elevation.is_finite()
+            && (SUN_MIN_ELEVATION..=SUN_MAX_ELEVATION).contains(&elevation))
+        .then(|| {
+            let (h, p) = (heading.to_radians(), elevation.to_radians());
+            Vec3::new(h.sin() * p.cos(), p.sin(), -h.cos() * p.cos())
+        });
+    }
+
     fn engines_for(&self, shot: &Shot, size: f64) -> Vec<Vec3> {
         match shot.target {
             Target::Airframe => Vec::new(),
@@ -229,7 +253,7 @@ impl Director {
             let wanted = self.requested;
             let shot = self.pick(s);
             self.requested_take = (wanted == Some(shot)).then_some(self.clock);
-            self.take = Some(self.new_take(shot, s, ground));
+            self.take = Some(self.new_take(shot, s, frame, ground));
             cut = true;
         }
         let take = self.take.expect("a take was just set");
@@ -372,21 +396,80 @@ impl Director {
         chosen
     }
 
-    fn new_take(&mut self, shot: usize, s: &Subject, ground: &mut dyn FnMut(Vec3) -> Option<f64>) -> Take {
+    fn new_take(
+        &mut self,
+        shot: usize,
+        s: &Subject,
+        frame: Attitude,
+        ground: &mut dyn FnMut(Vec3) -> Option<f64>,
+    ) -> Take {
         let (lo, hi) = (self.settings.shot_min_s, self.settings.shot_max_s.max(self.settings.shot_min_s));
         let duration = self.rng.range(lo, hi);
         let spec = &self.shots[shot];
-        let mut mirror = if spec.mirror && self.rng.next_f64() < 0.5 { -1.0 } else { 1.0 };
+        let mut two_sided = spec.mirror;
         let candidates = self.engines_for(spec, s.size);
+        let mut side = None;
         let engine = (!candidates.is_empty()).then(|| {
             let e = candidates[(self.rng.next_u64() % candidates.len() as u64) as usize];
             // Film each engine from its outboard side; centreline engines from either.
             if e.x.abs() > 0.05 * s.size {
-                mirror = e.x.signum();
+                side = Some(e.x.signum());
+                two_sided = false;
             }
             e
         });
-        let anchor = match spec.path {
+        let take = |mirror: f64, ground: &mut dyn FnMut(Vec3) -> Option<f64>| Take {
+            shot,
+            start: self.clock,
+            duration,
+            mirror,
+            anchor: self.anchor(shot, s, duration, mirror, ground),
+            engine,
+        };
+        if !two_sided {
+            return take(side.unwrap_or(1.0), ground);
+        }
+        let (right, left) = (take(1.0, ground), take(-1.0, ground));
+        let sunward = self.sun.and_then(|sun| {
+            let (a, b) = (self.facing(&right, s, frame, sun), self.facing(&left, s, frame, sun));
+            ((a - b).abs() >= SUN_MIN_DIFFERENCE).then_some(a > b)
+        });
+        let p_right = match sunward {
+            Some(true) => SUN_BIAS,
+            Some(false) => 1.0 - SUN_BIAS,
+            None => 0.5,
+        };
+        if self.rng.next_f64() < p_right {
+            right
+        } else {
+            left
+        }
+    }
+
+    /// How much a take looks towards the sun over its move, -1..1.
+    fn facing(&self, take: &Take, s: &Subject, frame: Attitude, sun: Vec3) -> f64 {
+        let samples = [0.2, 0.5, 0.8];
+        let total: f64 = samples
+            .iter()
+            .map(|&u| {
+                let at = Take { start: take.start - u * take.duration, ..*take };
+                let f = self.framing(&at, s, frame);
+                (f.look - f.pos).normalized_or(Vec3::FORWARD).dot(sun)
+            })
+            .sum();
+        total / samples.len() as f64
+    }
+
+    /// World position of a fixed camera, for shots that have one.
+    fn anchor(
+        &self,
+        shot: usize,
+        s: &Subject,
+        duration: f64,
+        mirror: f64,
+        ground: &mut dyn FnMut(Vec3) -> Option<f64>,
+    ) -> Option<Vec3> {
+        match self.shots[shot].path {
             Path::Flyby { side, height } => {
                 let speed = s.speed();
                 let fwd = if speed > 1.0 { s.vel * (1.0 / speed) } else { s.att.rotate(Vec3::FORWARD) };
@@ -404,8 +487,7 @@ impl Director {
                 Some(p)
             }
             _ => None,
-        };
-        Take { shot, start: self.clock, duration, mirror, anchor, engine }
+        }
     }
 
     /// The pause at the start of a take: never more than half of it, so
@@ -676,6 +758,38 @@ mod tests {
         assert_eq!(d.pause(&take), 2.0);
         d.clock = take.start + 3.0;
         assert!((d.progress(&take) - 0.5).abs() < 1e-9);
+    }
+
+    /// Fraction of `abeam` takes filmed looking towards a sun due north,
+    /// with the aircraft flying east.
+    fn sunward_share(sun: Option<(f64, f64)>) -> f64 {
+        let mut d = Director::new(Settings { shot_min_s: 2.0, shot_max_s: 2.0, ..only("abeam") }, 7);
+        if let Some((h, e)) = sun {
+            d.set_sun(h, e);
+        }
+        let s = cruising(0.0);
+        let (mut toward, mut takes) = (0, 0);
+        for _ in 0..400 {
+            d.next_shot();
+            let pose = d.update(&s, DT, &mut flat);
+            takes += 1;
+            // Looking north means the camera sits south of the aircraft.
+            if pose.pos.z > s.pos.z {
+                toward += 1;
+            }
+        }
+        toward as f64 / takes as f64
+    }
+
+    #[test]
+    fn two_sided_shots_favour_the_sun_behind_the_aircraft() {
+        let low_sun = sunward_share(Some((0.0, 5.0)));
+        assert!((0.68..=0.82).contains(&low_sun), "{low_sun}");
+        // Night, a sun overhead, or no sun at all: either side.
+        for sun in [Some((0.0, -30.0)), Some((0.0, 80.0)), None] {
+            let share = sunward_share(sun);
+            assert!((0.42..=0.58).contains(&share), "{sun:?}: {share}");
+        }
     }
 
     #[test]
