@@ -267,7 +267,7 @@ impl Director {
 
         match self.shots[take.shot].path {
             // Rigid: no lag, no smoothing, no clearance push. It's bolted on.
-            Path::Mount { at } => return self.mounted(&take, s, at),
+            Path::Mount { at, offset_m } => return self.mounted(&take, s, at * s.size + offset_m),
             Path::Overhead { .. } => return self.overhead(&take, s, frame),
             _ => {}
         }
@@ -343,12 +343,13 @@ impl Director {
         }
     }
 
+    /// `at`: mount point in the body frame, meters.
     fn mounted(&mut self, take: &Take, s: &Subject, at: Vec3) -> CameraPose {
         let shot = &self.shots[take.shot];
         let e = ease_in_out(self.progress(take));
         let m = take.mirror;
         let mount = at.mirror_x(m);
-        let look = shot.look_from.lerp(shot.look_to, e).mirror_x(m);
+        let look = (shot.look_from.lerp(shot.look_to, e) * s.size).mirror_x(m);
         // Aim in the body frame, then carry it through the aircraft's attitude.
         let (heading, pitch) = look_angles(look - mount);
         let local = Attitude::new(heading, pitch, shot.dutch * m);
@@ -357,7 +358,7 @@ impl Director {
         self.aim = Spring3::default();
         self.sight = None;
         CameraPose {
-            pos: s.pos + s.att.rotate(mount * s.size),
+            pos: s.pos + s.att.rotate(mount),
             heading: world.heading.rem_euclid(360.0),
             pitch: world.pitch.clamp(-89.9, 89.9),
             roll: world.roll,
@@ -495,7 +496,7 @@ impl Director {
                 s.pos + frame.level().rotate(off)
             }
             Path::Flyby { .. } => take.anchor.unwrap_or(s.pos),
-            Path::Mount { at } => s.pos + s.att.rotate(at.mirror_x(m) * size),
+            Path::Mount { at, offset_m } => s.pos + s.att.rotate((at * size + offset_m).mirror_x(m)),
             Path::Overhead { height_from, height_to } => s.pos + Vec3::UP * (lerp(height_from, height_to, e) * reach),
         };
 
@@ -734,8 +735,10 @@ mod tests {
                 let (x, y, z) = (b.rotate(Vec3::new(1.0, 0.0, 0.0)), b.rotate(Vec3::UP), b.rotate(Vec3::new(0.0, 0.0, 1.0)));
                 Vec3::new(v.dot(x), v.dot(y), v.dot(z))
             };
-            let at = back(pose.pos - s.pos) * (1.0 / s.size);
-            assert!((at.x.abs() - 0.48).abs() < 1e-6 && (at.y - 0.04).abs() < 1e-6, "{at:?}");
+            // Half a span out (20 m aircraft), 1.1 m ahead of the tip, a bit up.
+            let at = back(pose.pos - s.pos);
+            assert!((at.x.abs() - 10.0).abs() < 1e-6, "{at:?}");
+            assert!((at.y - 0.7).abs() < 1e-6 && (at.z - -1.5).abs() < 1e-6, "{at:?}");
             let up = back(att.rotate(Vec3::UP));
             assert!(up.y > 0.99, "camera not upright on the wing at roll {roll}: {up:?}");
             let fwd = back(att.rotate(Vec3::FORWARD));

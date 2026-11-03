@@ -55,7 +55,7 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 | Overhead pass | air (high) | top-down, running nose to tail |
 | Slow orbit | air, ground | level 120° arc around the aircraft |
 | Under the wing | air (high) | looks up at the belly from below and behind |
-| Wingtip cam | air, ground | wide-lens camera bolted to a wingtip, looking in at the fuselage. It's rigid, so it rolls and pitches with the aircraft |
+| Wingtip cam | air, ground | Insta360-style: an ultra-wide camera on a stick a foot or two ahead of a wingtip, looking back in at the fuselage. It's rigid, so it rolls and pitches with the aircraft |
 | Tail detail | air, ground | tight telephoto on the fin |
 | Wing detail | air, ground | tight telephoto on the inboard wing |
 | Engine: intake | air, ground | close on one engine from ahead and low, easing in on the intake or propeller |

@@ -19,10 +19,11 @@ pub enum Path {
     /// A photographer standing still (on the ground, or a hovering ship) at a
     /// point ahead of the subject, beside its track, panning as it passes.
     Flyby { side: f64, height: f64 },
-    /// A camera bolted to the airframe at `at` (in sizes, never distance-
-    /// scaled), aimed rigidly at the look point: it moves, pitches and
-    /// banks exactly with the aircraft.
-    Mount { at: Vec3 },
+    /// A camera fixed to the airframe at `at` (in sizes, never distance-
+    /// scaled) plus `offset_m` (meters, e.g. the length of a selfie stick),
+    /// aimed rigidly at the look point: it moves, pitches and banks exactly
+    /// with the aircraft.
+    Mount { at: Vec3, offset_m: Vec3 },
     /// Directly above the subject on the world vertical, looking straight
     /// down, nose at the top of the frame. Height in sizes.
     Overhead { height_from: f64, height_to: f64 },
@@ -215,13 +216,15 @@ pub const CATALOG: &[Shot] = &[
         id: "wingtip",
         name: "Wingtip cam",
         group: Group::Special,
-        blurb: "Camera bolted to the wingtip",
-        // Bolted just above the right wingtip, wide lens, looking in at the
-        // fuselage and cockpit.
-        path: Path::Mount { at: v(0.48, 0.04, 0.06) },
-        look_from: v(0.0, 0.06, -0.12),
-        look_to: v(0.0, 0.06, -0.12),
-        zoom: (0.85, 0.85),
+        blurb: "Insta360-style, just ahead of the wingtip",
+        // An action camera on a stick a foot or two ahead of the right
+        // wingtip's leading edge, ultra-wide, looking back in at the fuselage
+        // and cockpit. The tip is ~half a span out; the stick is in meters so
+        // it's the same real length on every aircraft.
+        path: Path::Mount { at: v(0.5, 0.03, -0.02), offset_m: v(0.0, 0.1, -1.1) },
+        look_from: v(0.0, 0.06, -0.08),
+        look_to: v(0.0, 0.06, -0.08),
+        zoom: (0.75, 0.75),
         bank_follow: 0.0,
         weight: 0.9,
         ..BASE
