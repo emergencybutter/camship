@@ -6,7 +6,7 @@
 //!    (formation lag), so in a turn the aircraft visibly rotates in the frame.
 //! 2. The current take's path gives a camera position in that frame and an aim
 //!    point on the airframe; both move with eased timing.
-//! 3. During a glide transition the previous and next takes are blended.
+//! 3. Each take opens on a still frame for the pause, then the move starts.
 //! 4. The position is pushed out of the airframe and above the terrain.
 //! 5. The aim goes through a critically damped spring: a smooth, fully
 //!    stabilized pan with no hand-held jitter.
@@ -68,17 +68,6 @@ struct Framing {
     roll: f64,
 }
 
-impl Framing {
-    fn blend(self, o: Self, t: f64) -> Self {
-        Self {
-            pos: self.pos.lerp(o.pos, t),
-            look: self.look.lerp(o.look, t),
-            zoom: lerp(self.zoom, o.zoom, t),
-            roll: lerp(self.roll, o.roll, t),
-        }
-    }
-}
-
 /// One take of one shot.
 #[derive(Clone, Copy, Debug)]
 struct Take {
@@ -93,13 +82,6 @@ struct Take {
     engine: Option<Vec3>,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Transition {
-    from: Take,
-    start: f64,
-    length: f64,
-}
-
 pub struct Director {
     shots: &'static [Shot],
     settings: Settings,
@@ -107,7 +89,6 @@ pub struct Director {
     clock: f64,
     frame: SmoothAttitude,
     take: Option<Take>,
-    transition: Option<Transition>,
     aim: Spring3,
     /// Previous camera-to-target vector and its smoothed rate, for aim lead.
     sight: Option<(Vec3, Vec3)>,
@@ -131,7 +112,6 @@ impl Director {
             clock: 0.0,
             frame: SmoothAttitude::default(),
             take: None,
-            transition: None,
             aim: Spring3::default(),
             sight: None,
             recent: VecDeque::new(),
@@ -159,7 +139,6 @@ impl Director {
     pub fn reset(&mut self) {
         self.frame.reset();
         self.take = None;
-        self.transition = None;
         self.aim = Spring3::default();
         self.sight = None;
         self.skip = false;
@@ -250,18 +229,8 @@ impl Director {
             let wanted = self.requested;
             let shot = self.pick(s);
             self.requested_take = (wanted == Some(shot)).then_some(self.clock);
-            let next = self.new_take(shot, s, ground);
-            let glide_s = self.settings.effective_glide_s();
-            let glide = match self.take {
-                Some(prev) if glide_s > 0.0 => self.can_glide(&prev) && self.can_glide(&next),
-                _ => false,
-            };
-            self.transition = match (glide, self.take) {
-                (true, Some(from)) => Some(Transition { from, start: self.clock, length: glide_s }),
-                _ => None,
-            };
-            cut = !glide;
-            self.take = Some(next);
+            self.take = Some(self.new_take(shot, s, ground));
+            cut = true;
         }
         let take = self.take.expect("a take was just set");
 
@@ -273,14 +242,6 @@ impl Director {
         }
 
         let mut f = self.framing(&take, s, frame);
-        if let Some(tr) = self.transition {
-            let u = (self.clock - tr.start) / tr.length;
-            if u >= 1.0 {
-                self.transition = None;
-            } else {
-                f = self.framing(&tr.from, s, frame).blend(f, ease_in_out(u));
-            }
-        }
         f.pos = self.keep_clear(f.pos, s, ground);
 
         let forward = s.att.rotate(Vec3::FORWARD);
@@ -318,12 +279,6 @@ impl Director {
 
     fn is_fixed(&self, take: &Take) -> bool {
         matches!(self.shots[take.shot].path, Path::Flyby { .. })
-    }
-
-    /// Only camera-ship shots can glide into each other; a fixed
-    /// photographer or a mounted camera is always cut to.
-    fn can_glide(&self, take: &Take) -> bool {
-        matches!(self.shots[take.shot].path, Path::Line { .. } | Path::Orbit { .. })
     }
 
     /// Straight down from above. The aim spring can't handle a vertical
@@ -453,17 +408,34 @@ impl Director {
         Take { shot, start: self.clock, duration, mirror, anchor, engine }
     }
 
+    /// The pause at the start of a take: never more than half of it, so
+    /// every shot still moves.
+    fn pause(&self, take: &Take) -> f64 {
+        self.settings.pause_s.clamp(0.0, 0.5 * take.duration)
+    }
+
+    /// How far along its move a take is, 0..1. The take opens on a still
+    /// frame for the pause, then moves. While held it plays back and forth,
+    /// pausing again at each end before moving back over the same shot.
     fn progress(&self, take: &Take) -> f64 {
-        let raw = (self.clock - take.start) / take.duration.max(1e-3);
-        if raw <= 1.0 {
-            raw.max(0.0)
+        let pause = self.pause(take);
+        let travel = (take.duration - pause).max(1e-3);
+        let t = self.clock - take.start - pause;
+        if t <= 0.0 {
+            0.0
+        } else if t <= travel {
+            t / travel
         } else if self.hold && Some(take.shot) == self.take.map(|t| t.shot) {
-            // Ping-pong: run the move backwards, then forwards again.
-            let k = raw.rem_euclid(2.0);
-            if k <= 1.0 {
-                k
+            // After the first move: pause, back, pause, forward, ...
+            let k = (t - travel).rem_euclid(2.0 * (pause + travel));
+            if k < pause {
+                1.0
+            } else if k < pause + travel {
+                1.0 - (k - pause) / travel
+            } else if k < 2.0 * pause + travel {
+                0.0
             } else {
-                2.0 - k
+                (k - 2.0 * pause - travel) / travel
             }
         } else {
             1.0
@@ -659,25 +631,51 @@ mod tests {
     }
 
     #[test]
-    fn glide_is_continuous_and_cut_is_not() {
-        let glide = Settings { glide: true, glide_s: 2.0, ..Settings::default() };
-        let mut d = Director::new(glide, 4);
-        let frames = run(&mut d, 90.0, cruising);
-        let mut max_glide_jump: f64 = 0.0;
-        for w in frames.windows(2) {
-            let (a, b) = (&w[0], &w[1]);
-            let glides = |id: &str| {
-                matches!(CATALOG.iter().find(|sh| sh.id == id).unwrap().path, Path::Line { .. } | Path::Orbit { .. })
-            };
-            // Fixed, mounted and overhead cameras are always cut to.
-            if a.2 != b.2 && glides(a.2) && glides(b.2) {
-                // Remove the subject's own motion, then compare.
-                let rel_a = a.1.pos - a.0.pos;
-                let rel_b = b.1.pos - b.0.pos;
-                max_glide_jump = max_glide_jump.max((rel_b - rel_a).len());
-            }
+    fn takes_open_on_a_still_frame_then_move() {
+        let settings = Settings { pause_s: 1.0, ..only("abeam") };
+        let mut d = Director::new(settings, 3);
+        let s = cruising(0.0);
+        // The aircraft holds still, so any camera motion is the move itself.
+        let mut poses = Vec::new();
+        for _ in 0..(3.0 / DT) as usize {
+            poses.push(d.update(&s, DT, &mut flat).pos);
         }
-        assert!(max_glide_jump < 0.1 * 20.0, "glide jumped {max_glide_jump} m");
+        let still = (0.9 / DT) as usize;
+        for p in &poses[1..still] {
+            assert!((*p - poses[0]).len() < 1e-6, "moved during the pause");
+        }
+        assert!((poses[poses.len() - 1] - poses[0]).len() > 0.5, "never moved after the pause");
+    }
+
+    #[test]
+    fn held_take_pauses_at_each_end() {
+        let settings = Settings { pause_s: 1.0, shot_min_s: 6.0, shot_max_s: 6.0, ..Settings::default() };
+        let mut d = Director::new(settings, 1);
+        d.set_hold(true);
+        d.update(&cruising(0.0), 0.0, &mut flat);
+        let take = d.take.unwrap();
+        let mut at = |t: f64| {
+            d.clock = take.start + t;
+            d.progress(&take)
+        };
+        // 1 s still, 5 s forward, 1 s still at the end, 5 s back, 1 s still, forward again.
+        assert_eq!(at(0.5), 0.0);
+        assert!((at(3.5) - 0.5).abs() < 1e-9);
+        assert_eq!(at(6.5), 1.0);
+        assert!((at(9.5) - 0.5).abs() < 1e-9);
+        assert_eq!(at(12.5), 0.0);
+        assert!((at(15.5) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pause_never_eats_the_whole_take() {
+        let settings = Settings { pause_s: 5.0, shot_min_s: 4.0, shot_max_s: 4.0, ..Settings::default() };
+        let mut d = Director::new(settings, 1);
+        d.update(&cruising(0.0), 0.0, &mut flat);
+        let take = d.take.unwrap();
+        assert_eq!(d.pause(&take), 2.0);
+        d.clock = take.start + 3.0;
+        assert!((d.progress(&take) - 0.5).abs() < 1e-9);
     }
 
     #[test]

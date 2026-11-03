@@ -263,14 +263,10 @@ fn camera(ui: &mut Ui, s: &mut Settings) {
             ui.add(Slider::new(&mut s.formation_lag_s, 0.0..=3.0).suffix(" s").max_decimals(1));
             ui.end_row();
 
-            ui.label("Between shots");
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut s.glide, false, "Cut");
-                ui.radio_value(&mut s.glide, true, "Glide");
-                if s.glide {
-                    ui.add(DragValue::new(&mut s.glide_s).range(0.2..=10.0).speed(0.05).suffix(" s").max_decimals(1));
-                }
-            });
+            ui.label("Pause").on_hover_text(
+                "How long the camera holds still at the start of each shot before it moves. With Hold on, it also pauses at each end",
+            );
+            ui.add(Slider::new(&mut s.pause_s, 0.0..=5.0).suffix(" s").max_decimals(1));
             ui.end_row();
         });
     });

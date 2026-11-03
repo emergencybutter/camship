@@ -31,7 +31,7 @@ CI builds Windows, Linux and a universal (Intel + Apple Silicon) macOS binary on
 
 - **Header:** Start/Stop, the shot on screen, **Next shot**, and **Hold** (the move plays back and forth instead of ending).
 - **Shots:** every shot, with a tick box and a one-line description, in three groups: *Camera plane*, *Close-ups* and *Special cameras*. Each group, and the whole list, has **All**/**None** buttons. The **play** button cuts to that shot straight away, even if it's unticked, so you can preview it. Unticking the shot on screen moves on to the next one. Engine shots are greyed out on aircraft that don't report engine positions.
-- **Camera:** take length, distance, zoom, turn lag, and cut or glide between shots (with the glide time). **Defaults** resets these but keeps your shot list.
+- **Camera:** take length, distance, zoom, turn lag, and the pause: how long the camera holds still at the start of each shot before it moves (with Hold on, it also pauses at each end). **Defaults** resets these but keeps your shot list.
 
 Changes apply immediately and are saved by themselves.
 
@@ -81,7 +81,7 @@ What makes it feel filmed rather than computed:
 | Key | Default | |
 |---|---|---|
 | `shot_min_s` / `shot_max_s` | 6 / 10 | length of each take, seconds |
-| `glide`, `glide_s` | 0, 2 | glide transitions and their length |
+| `pause_s` | 1 | how long the camera holds still at the start of each shot, seconds (0–5, at most half the take) |
 | `distance_scale` | 1.5 | how far the cameras sit from the aircraft (0.5–5); raise it to pull back, lower it to get closer |
 | `formation_lag_s` | 1.2 | how late the camera ship follows manoeuvres |
 | `frame_roll` | 0.5 | how much the formation position banks with the aircraft (0–1) |
@@ -99,7 +99,7 @@ crates/core      camship-core: pure Rust, no X-Plane. Unit-tested with `cargo te
   math.rs        Vec3, body→world rotation in X-Plane's local frame, look angles,
                  attitude low-pass, critically damped spring, smooth noise, RNG
   shots.rs       the shot catalog (paths, aim points, zoom, Dutch angle, constraints)
-  director.rs    shot picking, takes, glide blending, clearance, operator aim
+  director.rs    shot picking, takes, pauses, clearance, operator aim
   settings.rs    prefs + text format
 crates/plugin    camship (cdylib → win/lin/mac.xpl)
   ffi.rs         hand-written XPLM bindings (raw-dylib on Windows: no SDK download)
