@@ -1,5 +1,5 @@
 //! Hand-written bindings for the small subset of the X-Plane SDK (XPLM 2.1+)
-//! FlyCam uses.
+//! Camship uses.
 //!
 //! Signatures and constants mirror the official C headers. On Windows we link
 //! with `raw-dylib`, so no SDK import libraries are needed to build; on macOS

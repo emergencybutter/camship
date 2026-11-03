@@ -1,4 +1,4 @@
-//! FlyCam core: the cinematic camera director, free of any X-Plane dependency
+//! Camship core: the cinematic camera director, free of any X-Plane dependency
 //! so every behaviour can be unit-tested with `cargo test`.
 
 pub mod director;

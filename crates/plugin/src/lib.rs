@@ -1,4 +1,4 @@
-//! FlyCam: a cinematic camera for X-Plane that cuts between moving
+//! Camship: a cinematic camera for X-Plane that cuts between moving
 //! air-to-air and ground shots, like a camera ship filming a commercial.
 //!
 //! This file holds the C entry points X-Plane calls. Every callback is wrapped
@@ -221,13 +221,13 @@ unsafe extern "C" fn command_handler(_: XPLMCommandRef, phase: c_int, refcon: *m
 
 #[no_mangle]
 pub unsafe extern "C" fn XPluginStart(name: *mut c_char, sig: *mut c_char, desc: *mut c_char) -> c_int {
-    copy_out(name, "FlyCam");
-    copy_out(sig, "com.github.flycam");
+    copy_out(name, "Camship");
+    copy_out(sig, "com.github.camship");
     copy_out(desc, "Cinematic camera that cuts between moving air-to-air and ground shots.");
     guard("start", 0, || {
         xp::enable_feature("XPLM_USE_NATIVE_PATHS");
         let window = gui::EguiWindow::new(
-            "FlyCam",
+            "Camship",
             440,
             640,
             gui::Callbacks {
@@ -245,10 +245,10 @@ pub unsafe extern "C" fn XPluginStart(name: *mut c_char, sig: *mut c_char, desc:
         COMMANDS.with(|c| {
             let mut c = c.borrow_mut();
             for (name, desc, refcon) in [
-                ("flycam/toggle", "FlyCam: start/stop the cinematic camera", CMD_TOGGLE),
-                ("flycam/next_shot", "FlyCam: cut to the next shot", CMD_NEXT),
-                ("flycam/hold", "FlyCam: hold/release the current shot", CMD_HOLD),
-                ("flycam/toggle_window", "FlyCam: show/hide the settings window", CMD_WINDOW),
+                ("camship/toggle", "Camship: start/stop the cinematic camera", CMD_TOGGLE),
+                ("camship/next_shot", "Camship: cut to the next shot", CMD_NEXT),
+                ("camship/hold", "Camship: hold/release the current shot", CMD_HOLD),
+                ("camship/toggle_window", "Camship: show/hide the settings window", CMD_WINDOW),
             ] {
                 c.push(xp::OwnedCommand::new(name, desc, command_handler, refcon));
             }

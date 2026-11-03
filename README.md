@@ -1,17 +1,17 @@
-# FlyCam
+# Camship
 
 A cinematic camera plugin for X-Plane 11.50+/12, written in Rust. It films your aircraft the way a camera ship and a ground crew would for a commercial. It cuts between moving outside shots: formation slides, overtakes, orbits, head-on and top-down views, a wingtip camera, engine close-ups and flybys.
 
 ## Installing and updating
 
-Download `FlyCam-vX.Y.Z.zip` from the [latest release](https://github.com/emergencybutter/flycam/releases/latest) and copy the `FlyCam` folder into `X-Plane/Resources/plugins/`. It works on Windows, macOS (Intel and Apple Silicon) and Linux.
+Download `Camship-vX.Y.Z.zip` from the [latest release](https://github.com/emergencybutter/camship/releases/latest) and copy the `Camship` folder into `X-Plane/Resources/plugins/`. It works on Windows, macOS (Intel and Apple Silicon) and Linux.
 
-**Updating through [SkunkCrafts Updater](https://forums.x-plane.org/forums/topic/292710-20250206-skunkcrafts-updater-standalone-client-v32d-available/) is recommended.** The plugin folder includes a `skunkcrafts_updater.cfg`, so the updater picks up FlyCam on its own and fetches each new release. Without it, quit X-Plane and replace the `FlyCam` folder. Your settings are kept either way.
+**Updating through [SkunkCrafts Updater](https://forums.x-plane.org/forums/topic/292710-20250206-skunkcrafts-updater-standalone-client-v32d-available/) is recommended.** The plugin folder includes a `skunkcrafts_updater.cfg`, so the updater picks up Camship on its own and fetches each new release. Without it, quit X-Plane and replace the `Camship` folder. Your settings are kept either way.
 
 ### Building from source
 
 ```
-cargo xtask dist                                # builds dist/FlyCam/64/win.xpl (or lin/mac)
+cargo xtask dist                                # builds dist/Camship/64/win.xpl (or lin/mac)
 cargo xtask dist --install "D:\X-Plane 12"      # also copies it into Resources/plugins
 ```
 
@@ -19,15 +19,15 @@ CI builds Windows, Linux and a universal (Intel + Apple Silicon) macOS binary on
 
 ## Using it
 
-**Plugins → FlyCam**
+**Plugins → Camship**
 
 | Item | |
 |---|---|
 | **Cinematic camera** | Switches to an outside view and starts the director. Select it again to return to your previous view (3D cockpit, 2D panel or HUD). Choosing any other X-Plane view also ends it. |
-| **Next shot** | Cuts to the next shot straight away. If FlyCam is off, this starts it. |
-| **Settings...** | Opens the FlyCam window. |
+| **Next shot** | Cuts to the next shot straight away. If Camship is off, this starts it. |
+| **Settings...** | Opens the Camship window. |
 
-**The FlyCam window** is a floating X-Plane window that follows X-Plane's UI scale, and you can pop it out.
+**The Camship window** is a floating X-Plane window that follows X-Plane's UI scale, and you can pop it out.
 
 - **Header:** Start/Stop, the shot on screen, **Next shot**, and **Hold** (the move plays back and forth instead of ending).
 - **Shots:** every shot, with a tick box and a one-line description, in three groups: *Camera plane*, *Close-ups* and *Special cameras*. Each group, and the whole list, has **All**/**None** buttons. The **play** button cuts to that shot straight away, even if it's unticked, so you can preview it. Unticking the shot on screen moves on to the next one. Engine shots are greyed out on aircraft that don't report engine positions.
@@ -35,9 +35,9 @@ CI builds Windows, Linux and a universal (Intel + Apple Silicon) macOS binary on
 
 Changes apply immediately and are saved by themselves.
 
-You can bind these commands to keys: `flycam/toggle`, `flycam/next_shot`, `flycam/hold`, `flycam/toggle_window`.
+You can bind these commands to keys: `camship/toggle`, `camship/next_shot`, `camship/hold`, `camship/toggle_window`.
 
-X-Plane's screenshot (Shift+Space) and movie recording keep working while FlyCam runs, and they capture FlyCam's view. If X-Plane takes the camera back within 2 s of one, FlyCam takes it straight back and carries on with the same shot.
+X-Plane's screenshot (Shift+Space) and movie recording keep working while Camship runs, and they capture Camship's view. If X-Plane takes the camera back within 2 s of one, Camship takes it straight back and carries on with the same shot.
 
 ### The shots
 
@@ -76,7 +76,7 @@ What makes it feel filmed rather than computed:
 
 ### Preferences
 
-`X-Plane/Output/preferences/flycam.prf` holds these settings. The window covers everything except `frame_roll`, `ground_clearance_m` and `subject_size_m`. Edit the file while X-Plane is not running.
+`X-Plane/Output/preferences/camship.prf` holds these settings. The window covers everything except `frame_roll`, `ground_clearance_m` and `subject_size_m`. Edit the file while X-Plane is not running.
 
 | Key | Default | |
 |---|---|---|
@@ -90,25 +90,25 @@ What makes it feel filmed rather than computed:
 | `zoom_scale` | 1.0 | multiplies every zoom; lower it if your FOV is narrow |
 | `disabled_shots` | | comma-separated ids, e.g. `belly,top_down` |
 
-The aircraft size in use is written to `Log.txt` when FlyCam starts and each time an aircraft loads.
+The aircraft size in use is written to `Log.txt` when Camship starts and each time an aircraft loads.
 
 ## Design
 
 ```
-crates/core      flycam-core: pure Rust, no X-Plane. Unit-tested with `cargo test`.
+crates/core      camship-core: pure Rust, no X-Plane. Unit-tested with `cargo test`.
   math.rs        Vec3, body→world rotation in X-Plane's local frame, look angles,
                  attitude low-pass, critically damped spring, smooth noise, RNG
   shots.rs       the shot catalog (paths, aim points, zoom, Dutch angle, constraints)
   director.rs    shot picking, takes, glide blending, clearance, operator aim
   settings.rs    prefs + text format
-crates/plugin    flycam (cdylib → win/lin/mac.xpl)
+crates/plugin    camship (cdylib → win/lin/mac.xpl)
   ffi.rs         hand-written XPLM bindings (raw-dylib on Windows: no SDK download)
   xp.rs          safe wrappers: datarefs, commands, menus, terrain probe
   gui.rs, gl.rs  egui hosted in an XPLM floating window (shared with PauseAtToD)
-  view.rs        the FlyCam window's content (plain egui code)
+  view.rs        the Camship window's content (plain egui code)
   app.rs         state machine: Off → Starting (switch to chase view) → Running
   lib.rs         XPlugin* entry points, camera/menu/command callbacks
 xtask            `cargo xtask dist` packaging/installing
 ```
 
-FlyCam takes the camera with `XPLMControlCamera(xplm_ControlCameraUntilViewChanges)` one frame after it switches to `sim/view/chase`. This makes X-Plane draw the exterior model, and any view key the user presses hands control back cleanly. Every callback catches panics. If the camera callback panics, it gives the camera back to X-Plane.
+Camship takes the camera with `XPLMControlCamera(xplm_ControlCameraUntilViewChanges)` one frame after it switches to `sim/view/chase`. This makes X-Plane draw the exterior model, and any view key the user presses hands control back cleanly. Every callback catches panics. If the camera callback panics, it gives the camera back to X-Plane.

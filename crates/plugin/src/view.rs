@@ -1,7 +1,7 @@
-//! The FlyCam window's content, as plain egui code.
+//! The Camship window's content, as plain egui code.
 
 use egui::{vec2, Align, Button, Color32, CornerRadius, DragValue, Frame, Layout, Margin, RichText, Sense, Slider, Stroke, Ui};
-use flycam_core::{Group, Settings, Shot};
+use camship_core::{Group, Settings, Shot};
 
 const BG: Color32 = Color32::from_rgb(22, 25, 30);
 const CARD: Color32 = Color32::from_rgb(31, 35, 42);
@@ -163,7 +163,7 @@ fn shots(ui: &mut Ui, vm: &mut ViewModel, actions: &mut Vec<Action>, cap_height:
             });
         });
         if on == 0 {
-            ui.label(RichText::new("No shot ticked: FlyCam will use all of them.").small().color(AMBER));
+            ui.label(RichText::new("No shot ticked: Camship will use all of them.").small().color(AMBER));
         }
         let mut list = |ui: &mut Ui| {
             for group in Group::ALL {
@@ -282,9 +282,9 @@ fn footer(ui: &mut Ui, aircraft: &str) {
     ui.label(RichText::new(aircraft).small().color(MUTED));
     ui.label(
         RichText::new(concat!(
-            "FlyCam v",
+            "Camship v",
             env!("CARGO_PKG_VERSION"),
-            " · Keys: flycam/toggle, flycam/next_shot, flycam/hold, flycam/toggle_window"
+            " · Keys: camship/toggle, camship/next_shot, camship/hold, camship/toggle_window"
         ))
         .small()
         .color(MUTED),

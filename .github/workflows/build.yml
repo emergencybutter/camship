@@ -19,7 +19,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p flycam-core
+      - run: cargo test -p camship-core
       - run: cargo clippy --workspace --release -- -D warnings
 
   build:
@@ -60,7 +60,7 @@ jobs:
       - name: Inspect binary
         shell: bash
         run: |
-          f=dist/FlyCam/64/${{ matrix.name }}.xpl
+          f=dist/Camship/64/${{ matrix.name }}.xpl
           ls -l "$f"
           case "${{ matrix.name }}" in
             lin)
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}.xpl
-          path: dist/FlyCam/64/${{ matrix.name }}.xpl
+          path: dist/Camship/64/${{ matrix.name }}.xpl
           if-no-files-found: error
 
   bundle:
@@ -92,19 +92,19 @@ jobs:
           path: artifacts
       - name: Assemble the all-platform plugin folder
         run: |
-          mkdir -p FlyCam/64
-          cp artifacts/*/*.xpl FlyCam/64/
-          cp src/packaging/README.txt FlyCam/README.txt
-          cp src/LICENSE FlyCam/LICENSE.txt
+          mkdir -p Camship/64
+          cp artifacts/*/*.xpl Camship/64/
+          cp src/packaging/README.txt Camship/README.txt
+          cp src/LICENSE Camship/LICENSE.txt
           version=dev
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; fi
-          sed "s/REPLACE_ME/$version/" src/packaging/skunkcrafts_updater.cfg > FlyCam/skunkcrafts_updater.cfg
-          ls -l FlyCam/64
-          zip -r FlyCam.zip FlyCam
+          sed "s/REPLACE_ME/$version/" src/packaging/skunkcrafts_updater.cfg > Camship/skunkcrafts_updater.cfg
+          ls -l Camship/64
+          zip -r Camship.zip Camship
       - uses: actions/upload-artifact@v4
         with:
-          name: FlyCam
-          path: FlyCam
+          name: Camship
+          path: Camship
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -112,16 +112,16 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          cp FlyCam.zip "FlyCam-$TAG.zip"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "FlyCam $TAG" --generate-notes
-          gh release upload "$TAG" "FlyCam-$TAG.zip" --clobber
+          cp Camship.zip "Camship-$TAG.zip"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Camship $TAG" --generate-notes
+          gh release upload "$TAG" "Camship-$TAG.zip" --clobber
       # SkunkCrafts Updater reads the plugin folder plus its file lists from the
       # `skunkcrafts` branch (see packaging/skunkcrafts_updater.cfg). Only stable
       # tags are published there: anything with a "-" (v1.0.0-beta1) is skipped.
       - name: Publish to the SkunkCrafts Updater branch
         if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
         run: |
-          python3 - FlyCam <<'EOF'
+          python3 - Camship <<'EOF'
           import os, sys, zlib
           root = sys.argv[1]
           white, sizes = [], []
@@ -138,13 +138,13 @@ jobs:
               with open(os.path.join(root, f"skunkcrafts_updater_{name}.txt"), "w", newline="\n") as out:
                   out.write("\n".join(sorted(lines)) + "\n")
           EOF
-          cat FlyCam/skunkcrafts_updater_*.txt
+          cat Camship/skunkcrafts_updater_*.txt
           cd src
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan skunkcrafts
           git rm -rfq .
-          cp -r ../FlyCam/. .
+          cp -r ../Camship/. .
           git add -A
           git commit -qm "SkunkCrafts release $GITHUB_REF_NAME"
           git push -f origin skunkcrafts

@@ -1,6 +1,6 @@
 [package]
-name = "flycam-core"
-description = "Simulator-independent cinematic camera director for the FlyCam X-Plane plugin"
+name = "camship-core"
+description = "Simulator-independent cinematic camera director for the Camship X-Plane plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -12,7 +12,7 @@ pub fn cstring(s: &str) -> CString {
 }
 
 pub fn log(msg: &str) {
-    let line = cstring(&format!("FlyCam: {msg}\n"));
+    let line = cstring(&format!("Camship: {msg}\n"));
     unsafe { XPLMDebugString(line.as_ptr()) }
 }
 

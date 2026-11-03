@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use flycam_core::{Attitude, CameraPose, Director, Settings, Subject, Vec3};
+use camship_core::{Attitude, CameraPose, Director, Settings, Subject, Vec3};
 
 use crate::gui::EguiWindow;
 use crate::view::{self, Action, ViewModel};
@@ -176,7 +176,7 @@ pub struct App {
 impl App {
     pub fn new(window: EguiWindow, handler: crate::ffi::XPLMMenuHandler_f) -> Self {
         view::install_style(window.context());
-        let prefs_path = xp::system_path().join("Output").join("preferences").join("flycam.prf");
+        let prefs_path = xp::system_path().join("Output").join("preferences").join("camship.prf");
         let settings = match fs::read_to_string(&prefs_path) {
             Ok(text) => Settings::parse(&text),
             Err(_) => Settings::default(),
@@ -359,7 +359,7 @@ impl App {
                 DEFAULT_SIZE_M
             }
         };
-        xp::log(&format!("subject size {:.1} m (set subject_size_m in flycam.prf to override)", self.size));
+        xp::log(&format!("subject size {:.1} m (set subject_size_m in camship.prf to override)", self.size));
         let engines = self.refs.engines();
         match engines.len() {
             0 => xp::log("no engine positions reported; engine close-ups are off for this aircraft"),
@@ -453,7 +453,7 @@ impl App {
 }
 
 fn build_menu(handler: crate::ffi::XPLMMenuHandler_f) -> Option<MenuUi> {
-    let main = Menu::in_plugins_menu("FlyCam", handler)?;
+    let main = Menu::in_plugins_menu("Camship", handler)?;
     let toggle = main.item("Cinematic camera", MENU_TOGGLE);
     main.item("Next shot", MENU_NEXT);
     main.separator();

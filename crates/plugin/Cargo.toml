@@ -1,5 +1,5 @@
 [package]
-name = "flycam"
+name = "camship"
 description = "X-Plane plugin: a cinematic camera that cuts between moving air-to-air shots"
 version.workspace = true
 edition.workspace = true
@@ -11,4 +11,4 @@ crate-type = ["cdylib"]
 [dependencies]
 egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
 egui_glow = { version = "0.37", default-features = false }
-flycam-core = { path = "../core" }
+camship-core = { path = "../core" }

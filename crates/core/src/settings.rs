@@ -1,4 +1,4 @@
-//! User settings and the `flycam.prf` text format (`key value` per line).
+//! User settings and the `camship.prf` text format (`key value` per line).
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -114,7 +114,7 @@ impl Settings {
     pub fn to_text(&self) -> String {
         let b = |v: bool| if v { "1" } else { "0" };
         format!(
-            "# FlyCam preferences. Edit while X-Plane is not running.\n\
+            "# Camship preferences. Edit while X-Plane is not running.\n\
              shot_min_s {}\nshot_max_s {}\nglide {}\nglide_s {}\ndistance_scale {}\n\
              formation_lag_s {}\nframe_roll {}\nground_clearance_m {}\nsubject_size_m {}\n\
              zoom_scale {}\ndisabled_shots {}\n",

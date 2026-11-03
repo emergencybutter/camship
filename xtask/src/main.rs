@@ -1,15 +1,15 @@
 //! Build helper: `cargo xtask dist [--target <triple>]... [--install <X-Plane folder>]`.
 //!
 //! Builds the plugin in release mode and lays it out the way X-Plane expects:
-//! `dist/FlyCam/64/{win,lin,mac}.xpl`. Passing two macOS targets produces a
+//! `dist/Camship/64/{win,lin,mac}.xpl`. Passing two macOS targets produces a
 //! universal `mac.xpl` with `lipo`. With `--install`, the folder is also
-//! copied to `<X-Plane>/Resources/plugins/FlyCam`.
+//! copied to `<X-Plane>/Resources/plugins/Camship`.
 
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
 use std::{env, fs};
 
-const PLUGIN_DIR: &str = "FlyCam";
+const PLUGIN_DIR: &str = "Camship";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -46,15 +46,15 @@ fn dist(args: &[String]) -> Result<(), String> {
         return Err("several --target values only make sense for a universal macOS build".into());
     }
     let (lib, xpl) = match os {
-        "windows" => ("flycam.dll", "win.xpl"),
-        "macos" => ("libflycam.dylib", "mac.xpl"),
-        "linux" => ("libflycam.so", "lin.xpl"),
+        "windows" => ("camship.dll", "win.xpl"),
+        "macos" => ("libcamship.dylib", "mac.xpl"),
+        "linux" => ("libcamship.so", "lin.xpl"),
         other => return Err(format!("unsupported OS {other}")),
     };
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
     let mut cargo = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cargo.current_dir(&root).args(["build", "--release", "-p", "flycam"]);
+    cargo.current_dir(&root).args(["build", "--release", "-p", "camship"]);
     for t in &targets {
         cargo.args(["--target", t]);
     }
