@@ -31,7 +31,7 @@ CI builds Windows, Linux and a universal (Intel + Apple Silicon) macOS binary on
 
 - **Header:** Start/Stop, the shot on screen, **Next shot**, and **Hold** (the move plays back and forth instead of ending).
 - **Shots:** every shot, with a tick box and a one-line description, in three groups: *Camera plane*, *Close-ups* and *Special cameras*. Each group, and the whole list, has **All**/**None** buttons. The **play** button cuts to that shot straight away, even if it's unticked, so you can preview it. Unticking the shot on screen moves on to the next one. Engine shots are greyed out on aircraft that don't report engine positions.
-- **Camera:** take length, distance, zoom, turn lag, and the pause: how long the camera holds still at the start of each shot before it moves (with Hold on, it also pauses at each end). **Defaults** resets these but keeps your shot list.
+- **Camera:** take length, distance, zoom, turn lag, and the pause: how long the camera holds still at the start of each shot before it moves (with Hold on, it also pauses at each end), and whether to keep filming while the sim is paused. **Defaults** resets these but keeps your shot list.
 
 Changes apply immediately and are saved by themselves.
 
@@ -73,6 +73,7 @@ What makes it feel filmed rather than computed:
 - **Eased moves and zoom creep.** Every take starts and stops its dolly gently.
 - **Safety.** The camera never goes below terrain (probed every frame) plus 2 m. It also stays at least half a wingspan from the aircraft's reference point. Belly and overhead shots are only picked when the aircraft is high enough. Shots that stop fitting, for example a belly shot on short final, are cut early.
 - **Variety.** Shots are picked at random by weight. The last three shots are never repeated.
+- **Bullet time.** Pause X-Plane and the camera keeps flying around the frozen aircraft, cutting between shots as usual. Untick *Keep filming* to freeze it with the sim instead.
 - **Golden hour.** Shots that work from either side pick one at random, but three times out of four they take the side that puts the sun behind the aircraft, so sunrises and sunsets end up in the frame. This only applies when the sun is between 6° below the horizon and 60° up; at night, or with the sun high overhead, either side is equally likely.
 
 ### Preferences
@@ -89,6 +90,7 @@ What makes it feel filmed rather than computed:
 | `ground_clearance_m` | 2 | minimum camera height above terrain |
 | `subject_size_m` | 0 | aircraft size; 0 = read from `sim/aircraft/view/acf_size_x/z` |
 | `zoom_scale` | 1.0 | multiplies every zoom; lower it if your FOV is narrow |
+| `film_when_paused` | 1 | keep the camera moving around the frozen aircraft while the sim is paused |
 | `disabled_shots` | | comma-separated ids, e.g. `belly,top_down` |
 
 The aircraft size in use is written to `Log.txt` when Camship starts and each time an aircraft loads.

@@ -44,7 +44,8 @@ BASIC USAGE
      - Tick the shots you want. The play button next to a shot cuts to it
        straight away, so you can preview it.
      - Camera: shot length, distance, zoom, turn lag, and the pause (how
-       long the camera holds still at the start of each shot).
+       long the camera holds still at the start of each shot), and whether
+       to keep filming while the sim is paused.
    Changes apply immediately and are saved by themselves.
 
 Tips:

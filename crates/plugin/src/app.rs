@@ -72,7 +72,6 @@ struct Refs {
     phi: Option<DataRef>,
     agl: Option<DataRef>,
     on_ground: Option<DataRef>,
-    time: Option<DataRef>,
     size_x: Option<DataRef>,
     size_z: Option<DataRef>,
     view_type: Option<DataRef>,
@@ -83,6 +82,7 @@ struct Refs {
     sun_heading: Option<DataRef>,
     sun_pitch: Option<DataRef>,
     fov: Option<DataRef>,
+    paused: Option<DataRef>,
 }
 
 impl Refs {
@@ -100,7 +100,6 @@ impl Refs {
             phi: f("sim/flightmodel/position/phi"),
             agl: f("sim/flightmodel/position/y_agl"),
             on_ground: f("sim/flightmodel/failures/onground_any"),
-            time: f("sim/time/total_running_time_sec"),
             size_x: f("sim/aircraft/view/acf_size_x"),
             size_z: f("sim/aircraft/view/acf_size_z"),
             view_type: f("sim/graphics/view/view_type"),
@@ -111,6 +110,7 @@ impl Refs {
             sun_heading: f("sim/graphics/scenery/sun_heading_degrees"),
             sun_pitch: f("sim/graphics/scenery/sun_pitch_degrees"),
             fov: f("sim/graphics/view/field_of_view_deg"),
+            paused: f("sim/time/paused"),
         }
     }
 
@@ -145,10 +145,6 @@ impl Refs {
             engines
         }
     }
-
-    fn time(&self) -> f64 {
-        self.time.map_or(0.0, |r| r.f32() as f64)
-    }
 }
 
 struct MenuUi {
@@ -172,9 +168,10 @@ pub struct App {
     /// View type before we engaged, to go back to it afterwards.
     saved_view: Option<i32>,
     size: f64,
-    last_time: Option<f64>,
-    /// When the last screenshot/movie command ran (sim running time).
-    capture_at: Option<f64>,
+    /// When the camera last moved: real time, so it keeps going while paused.
+    last_time: Option<Instant>,
+    /// When the last screenshot/movie command ran (real time, so it works while paused too).
+    capture_at: Option<Instant>,
     /// Re-engaging after a capture: carry on with the same shot.
     resume: bool,
 }
@@ -237,11 +234,11 @@ impl App {
                 }
             }
             Event::Capture => {
-                self.capture_at = Some(self.refs.time());
+                self.capture_at = Some(Instant::now());
                 Request::None
             }
             Event::LostControl => {
-                let after_capture = self.capture_at.is_some_and(|t| (self.refs.time() - t).abs() < CAPTURE_GRACE_S);
+                let after_capture = self.capture_at.is_some_and(|t| t.elapsed().as_secs_f64() < CAPTURE_GRACE_S);
                 if self.state != State::Running {
                     Request::None
                 } else if after_capture {
@@ -435,9 +432,13 @@ impl App {
         if self.state != State::Running {
             return None;
         }
-        let now = self.refs.time();
-        let dt = self.last_time.map_or(0.0, |t| (now - t).max(0.0));
+        let now = Instant::now();
+        let mut dt = self.last_time.map_or(0.0, |t| now.duration_since(t).as_secs_f64());
         self.last_time = Some(now);
+        let paused = self.refs.paused.is_some_and(|r| r.i32() != 0);
+        if paused && !self.director.settings().film_when_paused {
+            dt = 0.0;
+        }
         let subject = self.refs.subject(self.size);
         if let (Some(h), Some(p)) = (self.refs.sun_heading, self.refs.sun_pitch) {
             self.director.set_sun(h.f32() as f64, p.f32() as f64);

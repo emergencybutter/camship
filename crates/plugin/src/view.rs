@@ -268,6 +268,12 @@ fn camera(ui: &mut Ui, s: &mut Settings) {
             );
             ui.add(Slider::new(&mut s.pause_s, 0.0..=5.0).suffix(" s").max_decimals(1));
             ui.end_row();
+
+            ui.label("Sim paused").on_hover_text(
+                "Keep the camera moving around the frozen aircraft while X-Plane is paused",
+            );
+            ui.checkbox(&mut s.film_when_paused, "Keep filming");
+            ui.end_row();
         });
     });
 }

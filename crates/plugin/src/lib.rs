@@ -31,6 +31,10 @@ thread_local! {
     static QUEUE: RefCell<VecDeque<Event>> = const { RefCell::new(VecDeque::new()) };
     static BUSY: Cell<bool> = const { Cell::new(false) };
     static COMMANDS: RefCell<Vec<xp::OwnedCommand>> = const { RefCell::new(Vec::new()) };
+    /// Frames drawn so far, counted by the draw callback.
+    static FRAME: Cell<u64> = const { Cell::new(0) };
+    /// Take the camera once this frame is drawn (None: nothing pending).
+    static TAKE_AT: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
 const CMD_TOGGLE: usize = 1;
@@ -89,7 +93,13 @@ fn perform(req: Request) {
     unsafe {
         match req {
             Request::None => {}
-            Request::TakeControlNextFrame => XPLMSetFlightLoopCallbackInterval(take_control_loop, -1.0, 1, ptr::null_mut()),
+            Request::TakeControlNextFrame => {
+                // The flight loop is the usual route, but it doesn't run while
+                // the sim is paused; the draw callback covers that case.
+                // Whichever fires first takes the camera.
+                TAKE_AT.with(|t| t.set(Some(FRAME.with(Cell::get) + 2)));
+                XPLMSetFlightLoopCallbackInterval(take_control_loop, -1.0, 1, ptr::null_mut());
+            }
             Request::ControlCamera => XPLMControlCamera(xplm_ControlCameraUntilViewChanges, camera, ptr::null_mut()),
             Request::ReleaseCamera => XPLMDontControlCamera(),
         }
@@ -143,10 +153,32 @@ unsafe extern "C" fn camera(out: *mut XPLMCameraPosition_t, losing: c_int, _: *m
     })
 }
 
+/// Takes the camera if a request is pending (from either route below).
+fn take_control_now() {
+    if TAKE_AT.with(|t| t.take()).is_some() {
+        post(Event::TakeControl);
+    }
+}
+
 unsafe extern "C" fn take_control_loop(_: c_float, _: c_float, _: c_int, _: *mut c_void) -> c_float {
     guard("flight loop", 0.0, || {
-        post(Event::TakeControl);
+        take_control_now();
         0.0
+    })
+}
+
+/// Runs every frame, paused or not. Waits a full frame after the request,
+/// like the flight loop, so the chase view is in place first.
+unsafe extern "C" fn frame_tick(_: c_int, _: c_int, _: *mut c_void) -> c_int {
+    guard("frame", 1, || {
+        let frame = FRAME.with(|f| {
+            f.set(f.get() + 1);
+            f.get()
+        });
+        if TAKE_AT.with(Cell::get).is_some_and(|at| frame >= at) {
+            take_control_now();
+        }
+        1
     })
 }
 
@@ -282,6 +314,7 @@ pub unsafe extern "C" fn XPluginEnable() -> c_int {
     guard("enable", 0, || {
         // Registered idle (interval 0); scheduled on demand to take the camera.
         XPLMRegisterFlightLoopCallback(take_control_loop, 0.0, ptr::null_mut());
+        XPLMRegisterDrawCallback(frame_tick, xplm_Phase_Window, 0, ptr::null_mut());
         1
     })
 }
@@ -293,6 +326,8 @@ pub unsafe extern "C" fn XPluginDisable() {
             perform(req);
         }
         XPLMUnregisterFlightLoopCallback(take_control_loop, ptr::null_mut());
+        XPLMUnregisterDrawCallback(frame_tick, xplm_Phase_Window, 0, ptr::null_mut());
+        TAKE_AT.with(|t| t.set(None));
     })
 }
 

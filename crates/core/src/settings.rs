@@ -20,6 +20,8 @@ pub struct Settings {
     pub subject_size_m: f64,
     /// Multiplies every shot's zoom (use < 1 if your default FOV is narrow).
     pub zoom_scale: f64,
+    /// Keep the camera moving while the sim is paused ("bullet time").
+    pub film_when_paused: bool,
     /// Shot ids the director must never pick.
     pub disabled_shots: Vec<String>,
 }
@@ -36,6 +38,7 @@ impl Default for Settings {
             ground_clearance_m: 2.0,
             subject_size_m: 0.0,
             zoom_scale: 1.0,
+            film_when_paused: true,
             disabled_shots: Vec::new(),
         }
     }
@@ -67,6 +70,11 @@ impl Settings {
                 None => (line, ""),
             };
             let num = |lo: f64, hi: f64| value.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| v.clamp(lo, hi));
+            let flag = || match value {
+                "1" | "true" | "on" | "yes" => Some(true),
+                "0" | "false" | "off" | "no" => Some(false),
+                _ => None,
+            };
             macro_rules! set {
                 ($field:ident, $v:expr) => {
                     if let Some(v) = $v {
@@ -84,6 +92,7 @@ impl Settings {
                 "ground_clearance_m" => set!(ground_clearance_m, num(0.5, 100.0)),
                 "subject_size_m" => set!(subject_size_m, num(0.0, 200.0)),
                 "zoom_scale" => set!(zoom_scale, num(0.2, 5.0)),
+                "film_when_paused" => set!(film_when_paused, flag()),
                 "disabled_shots" => {
                     s.disabled_shots = value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(String::from).collect()
                 }
@@ -101,7 +110,7 @@ impl Settings {
             "# Camship preferences. Edit while X-Plane is not running.\n\
              shot_min_s {}\nshot_max_s {}\npause_s {}\ndistance_scale {}\n\
              formation_lag_s {}\nframe_roll {}\nground_clearance_m {}\nsubject_size_m {}\n\
-             zoom_scale {}\ndisabled_shots {}\n",
+             zoom_scale {}\nfilm_when_paused {}\ndisabled_shots {}\n",
             self.shot_min_s,
             self.shot_max_s,
             self.pause_s,
@@ -111,6 +120,7 @@ impl Settings {
             self.ground_clearance_m,
             self.subject_size_m,
             self.zoom_scale,
+            if self.film_when_paused { 1 } else { 0 },
             self.disabled_shots.join(","),
         )
     }
@@ -122,7 +132,7 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let mut s = Settings { pause_s: 2.5, distance_scale: 2.5, ..Settings::default() };
+        let mut s = Settings { pause_s: 2.5, distance_scale: 2.5, film_when_paused: false, ..Settings::default() };
         s.set_disabled("belly", true);
         s.set_disabled("flyby", true);
         assert_eq!(Settings::parse(&s.to_text()), s);
@@ -130,11 +140,12 @@ mod tests {
 
     #[test]
     fn bad_values_fall_back_and_ranges_clamp() {
-        let s = Settings::parse("shot_min_s banana\ndistance_scale 99\nbogus 1\nshot_max_s 3\npause_s maybe\nglide 1\n");
+        let s = Settings::parse("shot_min_s banana\ndistance_scale 99\nbogus 1\nshot_max_s 3\npause_s maybe\nglide 1\nfilm_when_paused maybe\n");
         assert_eq!(s.distance_scale, 5.0);
         assert_eq!(s.shot_min_s, 6.0);
         // max below min is lifted to min.
         assert_eq!(s.shot_max_s, 6.0);
         assert_eq!(s.pause_s, 1.0);
+        assert!(s.film_when_paused);
     }
 }

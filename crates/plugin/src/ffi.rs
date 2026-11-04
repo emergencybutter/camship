@@ -24,6 +24,7 @@ pub type XPLMCommandCallback_f = unsafe extern "C" fn(cmd: XPLMCommandRef, phase
 pub type XPLMCameraControl_f =
     unsafe extern "C" fn(out: *mut XPLMCameraPosition_t, is_losing_control: c_int, refcon: *mut c_void) -> c_int;
 pub type XPLMDrawWindow_f = unsafe extern "C" fn(win: XPLMWindowID, refcon: *mut c_void);
+pub type XPLMDrawCallback_f = unsafe extern "C" fn(phase: c_int, is_before: c_int, refcon: *mut c_void) -> c_int;
 pub type XPLMHandleKey_f =
     unsafe extern "C" fn(win: XPLMWindowID, key: c_char, flags: c_int, vkey: c_char, refcon: *mut c_void, losing_focus: c_int);
 pub type XPLMHandleMouseClick_f =
@@ -66,6 +67,7 @@ pub struct XPLMCameraPosition_t {
 }
 pub const xplm_ControlCameraUntilViewChanges: c_int = 1;
 pub const xplm_ControlCameraForever: c_int = 2;
+pub const xplm_Phase_Window: c_int = 50;
 
 // XPLMScenery
 #[repr(C)]
@@ -189,6 +191,10 @@ extern "C" {
     pub fn XPLMRegisterFlightLoopCallback(f: XPLMFlightLoop_f, interval: c_float, refcon: *mut c_void);
     pub fn XPLMUnregisterFlightLoopCallback(f: XPLMFlightLoop_f, refcon: *mut c_void);
     pub fn XPLMSetFlightLoopCallbackInterval(f: XPLMFlightLoop_f, interval: c_float, relative_to_now: c_int, refcon: *mut c_void);
+
+    // XPLMDisplay: drawing
+    pub fn XPLMRegisterDrawCallback(f: XPLMDrawCallback_f, phase: c_int, before: c_int, refcon: *mut c_void) -> c_int;
+    pub fn XPLMUnregisterDrawCallback(f: XPLMDrawCallback_f, phase: c_int, before: c_int, refcon: *mut c_void) -> c_int;
 
     // XPLMMenus
     pub fn XPLMFindPluginsMenu() -> XPLMMenuID;
