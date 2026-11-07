@@ -23,7 +23,7 @@ CI builds Windows, Linux and a universal (Intel + Apple Silicon) macOS binary on
 
 | Item | |
 |---|---|
-| **Cinematic camera** | Switches to an outside view and starts the director. Select it again to return to your previous view (3D cockpit, 2D panel or HUD). Choosing any other X-Plane view also ends it. |
+| **Cinematic camera** | Switches to an outside view and starts the director. Select it again to return to your previous view (3D cockpit, 2D panel or HUD). Choosing any other X-Plane view also ends it. If another plugin takes the camera without a view change (some aircraft plugins do), Camship takes it back and carries on, up to 3 times a minute, and `Log.txt` says what happened. |
 | **Next shot** | Cuts to the next shot straight away. If Camship is off, this starts it. |
 | **Settings...** | Opens the Camship window. |
 

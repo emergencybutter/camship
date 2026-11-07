@@ -79,6 +79,12 @@ pub fn command_once(name: &str) -> bool {
     true
 }
 
+/// Whether some plugin has X-Plane's camera right now.
+pub fn camera_controlled() -> bool {
+    let mut how_long: c_int = 0;
+    unsafe { XPLMIsCameraBeingControlled(&mut how_long) != 0 }
+}
+
 /// A command handler we registered, removed on drop: either on a command
 /// this plugin owns, or on one of X-Plane's that we only watch.
 pub struct OwnedCommand {

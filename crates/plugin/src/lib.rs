@@ -43,6 +43,8 @@ const CMD_HOLD: usize = 3;
 const CMD_WINDOW: usize = 4;
 /// X-Plane's screenshot / movie commands, watched but never swallowed.
 const CMD_CAPTURE: usize = 10;
+/// `CMD_VIEW + i` watches `VIEW_COMMANDS[i]`, never swallowed.
+const CMD_VIEW: usize = 100;
 
 fn guard<R>(what: &str, fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|e| {
@@ -240,11 +242,12 @@ unsafe extern "C" fn command_handler(_: XPLMCommandRef, phase: c_int, refcon: *m
                 CMD_HOLD => post(Event::ToggleHold),
                 CMD_WINDOW => post(Event::ToggleWindow),
                 CMD_CAPTURE => post(Event::Capture),
+                r if r >= CMD_VIEW => post(Event::ViewCommand(r - CMD_VIEW)),
                 _ => {}
             }
         }
         // Let X-Plane run its own commands; ours end here.
-        (refcon as usize == CMD_CAPTURE) as c_int
+        (refcon as usize >= CMD_CAPTURE) as c_int
     })
 }
 
@@ -259,7 +262,7 @@ pub unsafe extern "C" fn XPluginStart(name: *mut c_char, sig: *mut c_char, desc:
     guard("start", 0, || {
         xp::enable_feature("XPLM_USE_NATIVE_PATHS");
         let window = gui::EguiWindow::new(
-            "Camship",
+            concat!("Camship v", env!("CARGO_PKG_VERSION")),
             440,
             640,
             gui::Callbacks {
@@ -289,6 +292,12 @@ pub unsafe extern "C" fn XPluginStart(name: *mut c_char, sig: *mut c_char, desc:
                 match xp::OwnedCommand::watch(name, command_handler, CMD_CAPTURE) {
                     Some(w) => c.push(w),
                     None => xp::log(&format!("{name} not found")),
+                }
+            }
+            // To tell the user picking a view from another plugin taking the camera.
+            for (i, name) in VIEW_COMMANDS.iter().enumerate() {
+                if let Some(w) = xp::OwnedCommand::watch(name, command_handler, CMD_VIEW + i) {
+                    c.push(w);
                 }
             }
         });

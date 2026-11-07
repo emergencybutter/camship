@@ -22,6 +22,70 @@ const SAVE_DELAY: Duration = Duration::from_millis(800);
 const CAPTURE_GRACE_S: f64 = 2.0;
 /// Used when the aircraft doesn't report its size, meters.
 const DEFAULT_SIZE_M: f64 = 15.0;
+/// A view command this recent explains losing the camera: the user picked a view.
+const VIEW_CMD_WINDOW: Duration = Duration::from_millis(500);
+/// Losing the camera with no view command (another plugin taking it, e.g. the
+/// DWSim ATR's SASL code) is not the user leaving, so we take it back. More than
+/// this many times in `RETAKE_WINDOW` is a fight we won't win: give up.
+const MAX_RETAKES: usize = 3;
+const RETAKE_WINDOW: Duration = Duration::from_secs(60);
+
+/// X-Plane commands that change the view. Watched (never swallowed) so that
+/// losing the camera can be told apart: right after one of these it's the
+/// user's choice; without one, someone else took the camera.
+pub const VIEW_COMMANDS: &[&str] = &[
+    "sim/view/ai_controls_views",
+    "sim/view/free_camera",
+    "sim/view/default_view",
+    "sim/view/forward_with_2d_panel",
+    "sim/view/forward_with_hud",
+    "sim/view/forward_with_nothing",
+    "sim/view/linear_spot",
+    "sim/view/still_spot",
+    "sim/view/runway",
+    "sim/view/circle",
+    "sim/view/tower",
+    "sim/view/ridealong",
+    "sim/view/track_weapon",
+    "sim/view/chase",
+    "sim/view/wingman",
+    "sim/view/3d_cockpit_cmnd_look",
+    "sim/view/3d_cockpit_toggle",
+    "sim/view/cinema_verite",
+    "sim/view/glance_left",
+    "sim/view/glance_right",
+    "sim/view/up_left",
+    "sim/view/up_right",
+    "sim/view/straight_up",
+    "sim/view/straight_down",
+    "sim/view/left_45",
+    "sim/view/right_45",
+    "sim/view/left_90",
+    "sim/view/right_90",
+    "sim/view/left_135",
+    "sim/view/right_135",
+    "sim/view/back",
+    "sim/view/quick_look_0",
+    "sim/view/quick_look_1",
+    "sim/view/quick_look_2",
+    "sim/view/quick_look_3",
+    "sim/view/quick_look_4",
+    "sim/view/quick_look_5",
+    "sim/view/quick_look_6",
+    "sim/view/quick_look_7",
+    "sim/view/quick_look_8",
+    "sim/view/quick_look_9",
+    "sim/view/quick_look_10",
+    "sim/view/quick_look_11",
+    "sim/view/quick_look_12",
+    "sim/view/quick_look_13",
+    "sim/view/quick_look_14",
+    "sim/view/quick_look_15",
+    "sim/view/quick_look_16",
+    "sim/view/quick_look_17",
+    "sim/view/quick_look_18",
+    "sim/view/quick_look_19",
+];
 
 #[derive(Clone, Copy, Debug)]
 pub enum Event {
@@ -36,8 +100,11 @@ pub enum Event {
     Capture,
     /// The view switch to an outside view has happened; take the camera.
     TakeControl,
-    /// X-Plane took the camera back (the user picked another view).
+    /// X-Plane took the camera back (the user picked another view, or
+    /// another plugin took it).
     LostControl,
+    /// `VIEW_COMMANDS[i]` is about to run.
+    ViewCommand(usize),
     NewFlight,
 }
 
@@ -174,6 +241,12 @@ pub struct App {
     capture_at: Option<Instant>,
     /// Re-engaging after a capture: carry on with the same shot.
     resume: bool,
+    /// The last view command seen while running, and when.
+    view_cmd: Option<(usize, Instant)>,
+    /// view_type when we last took the camera, for the log.
+    engaged_view: Option<i32>,
+    /// When we took the camera back after an unexplained loss.
+    retakes: Vec<Instant>,
 }
 
 impl App {
@@ -209,6 +282,9 @@ impl App {
             last_time: None,
             capture_at: None,
             resume: false,
+            view_cmd: None,
+            engaged_view: None,
+            retakes: Vec::new(),
         };
         app.refresh_size();
         app.sync_menu();
@@ -227,11 +303,22 @@ impl App {
                         self.director.reset();
                         self.last_time = None;
                     }
+                    if xp::camera_controlled() {
+                        xp::log("another plugin is controlling the camera; taking it over");
+                    }
                     self.state = State::Running;
+                    self.view_cmd = None;
+                    self.engaged_view = self.view_type();
                     Request::ControlCamera
                 } else {
                     Request::None
                 }
+            }
+            Event::ViewCommand(i) => {
+                if self.state == State::Running {
+                    self.view_cmd = Some((i, Instant::now()));
+                }
+                Request::None
             }
             Event::Capture => {
                 self.capture_at = Some(Instant::now());
@@ -239,6 +326,8 @@ impl App {
             }
             Event::LostControl => {
                 let after_capture = self.capture_at.is_some_and(|t| t.elapsed().as_secs_f64() < CAPTURE_GRACE_S);
+                let views = format!("view_type {} -> {}", fmt_view(self.engaged_view), fmt_view(self.view_type()));
+                let view_cmd = self.view_cmd.take().filter(|(_, t)| t.elapsed() < VIEW_CMD_WINDOW);
                 if self.state != State::Running {
                     Request::None
                 } else if after_capture {
@@ -246,15 +335,31 @@ impl App {
                     // movie; resume the same shot as if nothing happened.
                     xp::log("camera lost during a screenshot/movie; taking it back");
                     self.capture_at = None;
-                    self.resume = true;
-                    xp::command_once("sim/view/chase");
-                    self.state = State::Starting;
-                    Request::TakeControlNextFrame
-                } else {
+                    self.retake()
+                } else if let Some((i, _)) = view_cmd {
                     // The user chose another view; leave them there.
                     self.state = State::Off;
-                    xp::log("camera released (view changed)");
+                    xp::log(&format!("camera released: {} changed the view ({views})", VIEW_COMMANDS[i]));
                     Request::None
+                } else {
+                    // No view command: another plugin took the camera.
+                    self.retakes.retain(|t| t.elapsed() < RETAKE_WINDOW);
+                    if self.retakes.len() < MAX_RETAKES {
+                        self.retakes.push(Instant::now());
+                        xp::log(&format!(
+                            "camera lost without a view command ({views}); taking it back ({}/{MAX_RETAKES})",
+                            self.retakes.len()
+                        ));
+                        self.retake()
+                    } else {
+                        self.state = State::Off;
+                        xp::log(&format!(
+                            "camera lost without a view command ({views}), {} times in {} s; another plugin keeps taking it, giving up",
+                            MAX_RETAKES + 1,
+                            RETAKE_WINDOW.as_secs()
+                        ));
+                        Request::None
+                    }
                 }
             }
             Event::NewFlight => {
@@ -309,7 +414,20 @@ impl App {
             xp::log("no outside view command found");
         }
         self.state = State::Starting;
+        self.retakes.clear();
         Request::TakeControlNextFrame
+    }
+
+    /// Takes the camera back and carries on with the same shot.
+    fn retake(&mut self) -> Request {
+        self.resume = true;
+        xp::command_once("sim/view/chase");
+        self.state = State::Starting;
+        Request::TakeControlNextFrame
+    }
+
+    fn view_type(&self) -> Option<i32> {
+        self.refs.view_type.map(DataRef::i32)
     }
 
     fn stop(&mut self, restore_view: bool) -> Request {
@@ -463,6 +581,10 @@ impl App {
         m.main.set_checked(m.toggle, self.state != State::Off);
         m.main.set_checked(m.settings, self.window.is_visible());
     }
+}
+
+fn fmt_view(v: Option<i32>) -> String {
+    v.map_or_else(|| "?".to_string(), |v| v.to_string())
 }
 
 fn build_menu(handler: crate::ffi::XPLMMenuHandler_f) -> Option<MenuUi> {
