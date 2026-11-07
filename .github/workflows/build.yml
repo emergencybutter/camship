@@ -32,7 +32,7 @@ jobs:
             os: ubuntu-22.04
             targets: ""
           - name: mac
-            os: macos-14
+            os: macos-15
             targets: aarch64-apple-darwin x86_64-apple-darwin
           - name: win
             os: windows-2022
