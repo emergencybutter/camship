@@ -261,7 +261,10 @@ impl Director {
             Some(t) => {
                 self.skip
                     || (!self.hold && self.clock - t.start >= t.duration)
-                    || !self.still_fits(&t, s)
+                    // Only cut for a misfit when something else fits; otherwise
+                    // the fallback shot would be re-picked every frame, flipping
+                    // sides at random.
+                    || (!self.still_fits(&t, s) && self.any_fit(s))
                     // Unticked while on screen: move on, unless the user asked
                     // for it or nothing else is ticked.
                     || (self.settings.is_disabled(self.shots[t.shot].id)
@@ -367,8 +370,10 @@ impl Director {
     }
 
     fn fits(&self, shot: &Shot, s: &Subject) -> bool {
+        // Parked aircraft can report a hair below the ground (the DWSim ATR
+        // sits at -0.01 m): that's on the ground, not out of every shot.
         (if s.on_ground { shot.on_ground } else { shot.in_air })
-            && s.agl >= shot.min_agl * s.size
+            && s.agl.max(0.0) >= shot.min_agl * s.size
             && s.speed() >= shot.min_speed
             && (shot.target == Target::Airframe || !self.engines_for(shot, s.size).is_empty())
     }
@@ -376,6 +381,10 @@ impl Director {
     fn still_fits(&self, take: &Take, s: &Subject) -> bool {
         // A fixed camera stays put whatever the aircraft does, until the take ends.
         self.is_fixed(take) || self.fits(&self.shots[take.shot], s)
+    }
+
+    fn any_fit(&self, s: &Subject) -> bool {
+        self.shots.iter().any(|sh| self.fits(sh, s))
     }
 
     fn any_enabled_fit(&self, s: &Subject) -> bool {
@@ -656,6 +665,43 @@ mod tests {
                 assert!(mounted || (pose.pos - s.pos).len() >= 0.5 * s.size - 1e-6, "{id} inside the aircraft");
             }
         }
+    }
+
+    /// Parked a hair below the ground, like the DWSim ATR 72 (y_agl -0.01 m).
+    fn parked_below_ground(_: f64) -> Subject {
+        Subject { vel: Vec3::ZERO, agl: -0.0116, ..taxiing(0.0) }
+    }
+
+    /// Frame-to-frame camera heading jumps over 20°: cuts, or flicker.
+    fn heading_jumps(out: &[(Subject, CameraPose, &'static str)]) -> usize {
+        out.windows(2)
+            .filter(|w| {
+                let d = (w[1].1.heading - w[0].1.heading).rem_euclid(360.0);
+                d > 20.0 && d < 340.0
+            })
+            .count()
+    }
+
+    #[test]
+    fn parked_slightly_below_ground_still_gets_shots() {
+        let mut d = Director::new(Settings::default(), 7);
+        let out = run(&mut d, 60.0, parked_below_ground);
+        let ids: std::collections::HashSet<_> = out.iter().map(|o| o.2).collect();
+        assert!(ids.len() > 1, "only {ids:?}");
+        // Takes last seconds, not a frame: no flicker between sides.
+        let jumps = heading_jumps(&out);
+        assert!(jumps < 30, "{jumps} heading jumps in 60 s");
+    }
+
+    #[test]
+    fn nothing_fitting_holds_the_fallback_instead_of_recutting() {
+        // In the air and below ground: no shot fits at all.
+        fn nowhere(t: f64) -> Subject {
+            Subject { on_ground: false, agl: -50.0, ..taxiing(t) }
+        }
+        let mut d = Director::new(Settings::default(), 9);
+        let jumps = heading_jumps(&run(&mut d, 2.0, nowhere));
+        assert!(jumps <= 1, "{jumps} heading jumps in 2 s");
     }
 
     #[test]
