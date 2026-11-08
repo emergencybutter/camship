@@ -222,7 +222,7 @@ fn shot_row(ui: &mut Ui, vm: &mut ViewModel, i: usize, shot: &Shot, actions: &mu
             if play.clicked() {
                 actions.push(Action::Play(i));
             }
-            let blurb = if supported { shot.blurb } else { "no engine data for this aircraft" };
+            let blurb = if supported { shot.blurb } else { "not available for this aircraft" };
             ui.add(egui::Label::new(RichText::new(blurb).small().color(MUTED)).truncate());
         });
     });

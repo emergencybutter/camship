@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use camship_core::{Attitude, CameraPose, Director, Settings, Subject, Vec3};
+use camship_core::{Attitude, CameraPose, Director, Settings, Subject, Systems, Vec3};
 
 use crate::gui::EguiWindow;
 use crate::view::{self, Action, ViewModel};
@@ -150,6 +150,13 @@ struct Refs {
     sun_pitch: Option<DataRef>,
     fov: Option<DataRef>,
     paused: Option<DataRef>,
+    gear_deploy: Option<DataRef>,
+    flaps: Option<DataRef>,
+    reversers: Option<DataRef>,
+    /// Wheel positions, body frame, meters.
+    wheel_x: Option<DataRef>,
+    wheel_y: Option<DataRef>,
+    wheel_z: Option<DataRef>,
 }
 
 impl Refs {
@@ -178,6 +185,12 @@ impl Refs {
             sun_pitch: f("sim/graphics/scenery/sun_pitch_degrees"),
             fov: f("sim/graphics/view/field_of_view_deg"),
             paused: f("sim/time/paused"),
+            gear_deploy: f("sim/flightmodel2/gear/deploy_ratio"),
+            flaps: f("sim/flightmodel2/controls/flap1_deploy_ratio").or_else(|| f("sim/flightmodel/controls/flaprat")),
+            reversers: f("sim/flightmodel2/engines/thrust_reverser_deploy_ratio"),
+            wheel_x: f("sim/flightmodel/parts/tire_x_no_deflection"),
+            wheel_y: f("sim/flightmodel/parts/tire_y_no_deflection"),
+            wheel_z: f("sim/flightmodel/parts/tire_z_no_deflection"),
         }
     }
 
@@ -191,7 +204,37 @@ impl Refs {
             agl: f(self.agl),
             on_ground: self.on_ground.is_some_and(|r| r.i32() != 0),
             size,
+            systems: self.systems(),
         }
+    }
+
+    /// Gear, flaps and reversers. Missing datarefs read as gear down, flaps
+    /// up and reversers stowed, so they never trigger anything.
+    fn systems(&self) -> Systems {
+        let max = |r: Option<DataRef>, n: usize| {
+            r.and_then(|r| r.f32s(n).into_iter().map(f64::from).filter(|v| v.is_finite()).reduce(f64::max))
+        };
+        let n_engines = self.num_engines.map_or(0, |n| n.i32().clamp(0, 16) as usize);
+        let d = Systems::default();
+        Systems {
+            // The first wheel to move: extending starts with it, retracting ends with it.
+            gear: max(self.gear_deploy, 10).unwrap_or(d.gear),
+            flaps: self.flaps.map_or(d.flaps, |r| r.f32() as f64),
+            reverser: max(self.reversers, n_engines).unwrap_or(d.reverser),
+        }
+    }
+
+    /// Wheel positions, body frame, meters from the CG (+x right, +y up, +z aft).
+    fn wheels(&self) -> Vec<Vec3> {
+        let (Some(x), Some(y), Some(z)) = (self.wheel_x, self.wheel_y, self.wheel_z) else {
+            return Vec::new();
+        };
+        let (xs, ys, zs) = (x.f32s(10), y.f32s(10), z.f32s(10));
+        (0..xs.len().min(ys.len()).min(zs.len()))
+            .map(|i| Vec3::new(xs[i] as f64, ys[i] as f64, zs[i] as f64))
+            // Unused slots are at the origin.
+            .filter(|w| w.x.is_finite() && w.y.is_finite() && w.z.is_finite() && w.len() > 0.1 && w.len() < 100.0)
+            .collect()
     }
 
     /// Engine positions, body frame, meters from the CG (+x right, +y up, +z aft).
@@ -499,6 +542,15 @@ impl App {
             }
         );
         self.director.set_engines(engines);
+        let wheels = self.refs.wheels();
+        match wheels.len() {
+            0 => xp::log("no wheel positions reported; gear shots use a typical layout"),
+            n => xp::log(&format!(
+                "{n} wheel(s) at {}",
+                wheels.iter().map(|w| format!("({:.1}, {:.1}, {:.1})", w.x, w.y, w.z)).collect::<Vec<_>>().join(", ")
+            )),
+        }
+        self.director.set_gear(wheels);
     }
 
     pub fn window(&mut self) -> &mut EguiWindow {
@@ -566,7 +618,11 @@ impl App {
         }
         let probe = self.probe.as_ref();
         let mut ground = |p: Vec3| probe.and_then(|pr| pr.ground_y(p.x, p.y, p.z));
-        Some(self.director.update(&subject, dt, &mut ground))
+        let pose = self.director.update(&subject, dt, &mut ground);
+        for note in self.director.take_notes() {
+            xp::log(&note);
+        }
+        Some(pose)
     }
 
     pub fn shutdown(&mut self) -> Request {

@@ -13,9 +13,10 @@
 
 use std::collections::VecDeque;
 
+use crate::events::{Detector, Event, Systems, Trigger};
 use crate::math::{ease_in_out, exp_alpha, lerp, look_angles, Attitude, Rng, SmoothAttitude, Spring3, Vec3};
 use crate::settings::Settings;
-use crate::shots::{nacelle_size, Path, Shot, Target, CATALOG};
+use crate::shots::{nacelle_size, wheel_size, Path, Shot, Target, CATALOG};
 
 /// Natural frequency of the aim spring, rad/s. Higher is a tighter pan.
 const AIM_OMEGA: f64 = 6.0;
@@ -52,6 +53,26 @@ const FLYBY_PASS: f64 = 0.55;
 const LOCKED_OFF_PASS: f64 = 0.4;
 /// X-Plane's default horizontal field of view, for when it can't be read.
 const DEFAULT_FOV_DEG: f64 = 60.0;
+/// An action shot holds at least this long before another action can cut
+/// it, s.
+const ACTION_MIN_S: f64 = 4.0;
+/// Gear and flaps take a while to move: their shots last at least this long, s.
+const ACTION_MIN_TAKE_S: f64 = 6.0;
+/// After the wheels touch, the touchdown shot stays on the rollout this long, s.
+const ROLLOUT_S: f64 = 3.5;
+/// The touchdown shot can't be cut until this long after the wheels touch, s.
+const TOUCHDOWN_HOLD_S: f64 = 1.5;
+/// An action that couldn't be filmed straight away (another action was on
+/// screen) is dropped after this long: the moment has passed, s.
+const ACTION_MAX_DELAY_S: f64 = 3.0;
+/// A touchdown shot needs this long before the wheels touch to set up, s.
+const TOUCHDOWN_MIN_LEAD_S: f64 = 1.0;
+/// Where a main wheel sits when the aircraft doesn't say, in sizes
+/// (+x right, +y up, +z aft from the reference point).
+const GUESS_MAIN_GEAR: Vec3 = Vec3::new(0.12, -0.1, 0.04);
+const GUESS_NOSE_GEAR: Vec3 = Vec3::new(0.0, -0.1, -0.32);
+/// Wheels within this of the centreline (sizes) are nose or tail wheels.
+const CENTRELINE: f64 = 0.04;
 
 /// What the director needs to know about the aircraft, in world coordinates.
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +86,8 @@ pub struct Subject {
     pub on_ground: bool,
     /// Characteristic size (about the wingspan), meters.
     pub size: f64,
+    /// Gear, flaps and reversers, for action shots.
+    pub systems: Systems,
 }
 
 impl Subject {
@@ -103,8 +126,20 @@ struct Take {
     anchor: Option<Vec3>,
     /// Where the aircraft will be when it passes a fixed camera.
     pass: Option<Vec3>,
-    /// Body-frame position (meters) of the engine an engine shot films.
-    engine: Option<Vec3>,
+    /// Body-frame position (meters) of the engine or wheel an engine or
+    /// gear shot films.
+    part: Option<Vec3>,
+    /// What an action shot is filming.
+    event: Option<Trigger>,
+    /// Until when (director clock) no other action may cut this take.
+    protect_until: f64,
+}
+
+/// An action waiting for the one on screen to finish its moment.
+#[derive(Clone, Copy, Debug)]
+struct Pending {
+    event: Event,
+    at: f64,
 }
 
 pub struct Director {
@@ -126,6 +161,12 @@ pub struct Director {
     requested_take: Option<f64>,
     /// Engine positions in the body frame, meters from the reference point.
     engines: Vec<Vec3>,
+    /// Wheel positions in the body frame, meters; empty if unknown.
+    gear: Vec<Vec3>,
+    detector: Detector,
+    pending: Option<Pending>,
+    /// Lines for the log: what happened and what was filmed.
+    notes: Vec<String>,
     /// Unit vector towards the sun, world frame, when it's worth framing.
     sun: Option<Vec3>,
     /// The same, only while the sun is low enough for a silhouette.
@@ -151,6 +192,10 @@ impl Director {
             requested: None,
             requested_take: None,
             engines: Vec::new(),
+            gear: Vec::new(),
+            detector: Detector::default(),
+            pending: None,
+            notes: Vec::new(),
             sun: None,
             low_sun: None,
             fov_deg: DEFAULT_FOV_DEG,
@@ -176,6 +221,13 @@ impl Director {
         self.aim = Spring3::default();
         self.sight = None;
         self.skip = false;
+        self.detector.reset();
+        self.pending = None;
+    }
+
+    /// What happened since the last call, for the log.
+    pub fn take_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notes)
     }
 
     /// Moves on to the next shot on the next frame.
@@ -201,7 +253,22 @@ impl Director {
     /// Whether shot `index` has the data it needs for this aircraft at all,
     /// whatever the aircraft is doing.
     pub fn supported(&self, index: usize, size: f64) -> bool {
-        self.shots.get(index).is_some_and(|shot| shot.target == Target::Airframe || !self.engines_for(shot, size).is_empty())
+        self.shots.get(index).is_some_and(|shot| shot.target == Target::Airframe || !self.parts_for(shot, size).is_empty())
+    }
+
+    /// Wheel positions (body frame, meters; +x right, +y up, +z aft), or
+    /// empty to use a typical layout.
+    pub fn set_gear(&mut self, gear: Vec<Vec3>) {
+        self.gear = gear;
+    }
+
+    /// Height of the reference point above the ground with the wheels on
+    /// it, meters, until it can be measured on the ground.
+    fn rest_height(&self, size: f64) -> f64 {
+        let lowest = self.gear.iter().map(|g| g.y).fold(f64::INFINITY, f64::min);
+        let centre = if lowest.is_finite() && lowest < 0.0 { -lowest } else { -GUESS_MAIN_GEAR.y * size };
+        // The wheel centre plus about a wheel radius.
+        centre + 0.5 * wheel_size(size)
     }
 
     /// Engine positions (body frame, meters; +x right, +y up, +z aft).
@@ -238,12 +305,40 @@ impl Director {
         self.low_sun = dir.filter(|_| (SILHOUETTE_MIN_ELEVATION..=SILHOUETTE_MAX_ELEVATION).contains(&elevation));
     }
 
-    fn engines_for(&self, shot: &Shot, size: f64) -> Vec<Vec3> {
+    /// The engines or wheels a shot could film.
+    fn parts_for(&self, shot: &Shot, size: f64) -> Vec<Vec3> {
         match shot.target {
             Target::Airframe => Vec::new(),
             Target::Engine { outboard_only } => {
                 self.engines.iter().copied().filter(|e| !outboard_only || e.x.abs() > 0.1 * size).collect()
             }
+            Target::Gear { nose } if self.gear.is_empty() => {
+                if nose {
+                    vec![GUESS_NOSE_GEAR * size]
+                } else {
+                    vec![GUESS_MAIN_GEAR * size, GUESS_MAIN_GEAR.mirror_x(-1.0) * size]
+                }
+            }
+            // The most forward centreline wheel, if it's ahead (not a tailwheel).
+            Target::Gear { nose: true } => self
+                .gear
+                .iter()
+                .copied()
+                .filter(|g| g.x.abs() <= CENTRELINE * size && g.z < 0.0)
+                .min_by(|a, b| a.z.total_cmp(&b.z))
+                .into_iter()
+                .collect(),
+            Target::Gear { nose: false } => self.gear.iter().copied().filter(|g| g.x.abs() > CENTRELINE * size).collect(),
+        }
+    }
+
+    /// Where a take's offsets are measured from (body frame, meters) and
+    /// their unit, meters: the airframe in sizes, or an engine or wheel.
+    fn origin(&self, take: &Take, size: f64) -> (Vec3, f64) {
+        match (take.part, self.shots[take.shot].target) {
+            (Some(p), Target::Engine { .. }) => (p, nacelle_size(size)),
+            (Some(p), Target::Gear { .. }) => (p, wheel_size(size)),
+            _ => (Vec3::ZERO, size),
         }
     }
 
@@ -272,7 +367,7 @@ impl Director {
         self.clock += dt;
         let frame = self.frame.update(s.att, dt, self.settings.formation_lag_s);
 
-        let mut cut = false;
+        let mut cut = self.action(s, dt, frame, ground);
         let expired = match self.take {
             None => true,
             Some(t) => {
@@ -294,14 +389,15 @@ impl Director {
             let wanted = self.requested;
             let shot = self.pick(s);
             self.requested_take = (wanted == Some(shot)).then_some(self.clock);
-            self.take = Some(self.new_take(shot, s, frame, ground));
+            let duration = self.duration();
+            self.take = Some(self.new_take(shot, s, frame, ground, duration, None, None));
             cut = true;
         }
         let take = self.take.expect("a take was just set");
 
         match self.shots[take.shot].path {
             // Rigid: no lag, no smoothing, no clearance push. It's bolted on.
-            Path::Mount { at, offset_m } => return self.mounted(&take, s, at * s.size + offset_m, ground),
+            Path::Mount { at, offset_m } => return self.mounted(&take, s, at, offset_m, ground),
             Path::Overhead { .. } => return self.overhead(&take, s, frame),
             Path::LockedOff { .. } => return self.locked_off(&take, s),
             _ => {}
@@ -352,6 +448,87 @@ impl Director {
         }
     }
 
+    /// Watches for actions (gear, flaps, touchdown, reversers) and cuts to
+    /// an action shot for one. Returns whether it cut.
+    fn action(
+        &mut self,
+        s: &Subject,
+        dt: f64,
+        frame: Attitude,
+        ground: &mut dyn FnMut(Vec3) -> Option<f64>,
+    ) -> bool {
+        let rest = self.rest_height(s.size);
+        if let Some(event) = self.detector.update(s, dt, rest) {
+            self.notes.push(format!("{} {}", event.trigger.label(), event.what));
+            // Nothing bumps a touchdown that's still waiting.
+            if self.pending.is_none_or(|p| p.event.trigger != Trigger::Touchdown || event.trigger == Trigger::Touchdown) {
+                self.pending = Some(Pending { event, at: self.clock });
+            }
+        }
+        let Some(p) = self.pending else { return false };
+        let waited = self.clock - p.at;
+        let in_s = p.event.in_s - waited;
+        let stale = match p.event.trigger {
+            Trigger::Touchdown => in_s < TOUCHDOWN_MIN_LEAD_S,
+            _ => waited > ACTION_MAX_DELAY_S,
+        };
+        if stale {
+            self.pending = None;
+            self.notes.push(format!("{}: missed, another action was on screen", p.event.trigger.label()));
+            return false;
+        }
+        // Held: the user is watching this take. Another action's moment: let it play.
+        if self.hold || self.take.is_some_and(|t| t.event.is_some() && self.clock < t.protect_until) {
+            return false;
+        }
+        self.pending = None;
+        let Some(shot) = self.pick_action(p.event.trigger, s) else {
+            return false;
+        };
+        let (duration, pass_in, protect) = match p.event.trigger {
+            Trigger::Touchdown => (in_s + ROLLOUT_S, Some(in_s), in_s + TOUCHDOWN_HOLD_S),
+            _ => (self.duration().max(ACTION_MIN_TAKE_S), None, ACTION_MIN_S),
+        };
+        let mut take = self.new_take(shot, s, frame, ground, duration, pass_in, Some(p.event.trigger));
+        take.protect_until = self.clock + protect.min(duration);
+        self.take = Some(take);
+        self.requested_take = None;
+        self.skip = false;
+        self.notes.push(format!("{}: filming {}", p.event.trigger.label(), self.shots[shot].name));
+        true
+    }
+
+    /// An enabled action shot for `trigger` that can be filmed now.
+    fn pick_action(&mut self, trigger: Trigger, s: &Subject) -> Option<usize> {
+        let pool: Vec<usize> = (0..self.shots.len())
+            .filter(|&i| {
+                let sh = &self.shots[i];
+                sh.trigger == Some(trigger) && !self.settings.is_disabled(sh.id) && self.fits(sh, s)
+            })
+            .collect();
+        self.weighted(&pool)
+    }
+
+    /// One of `pool`, at random by weight.
+    fn weighted(&mut self, pool: &[usize]) -> Option<usize> {
+        let last = *pool.last()?;
+        let total: f64 = pool.iter().map(|&i| self.shots[i].weight.max(0.0)).sum();
+        let mut r = self.rng.next_f64() * total;
+        for &i in pool {
+            r -= self.shots[i].weight.max(0.0);
+            if r < 0.0 {
+                return Some(i);
+            }
+        }
+        Some(last)
+    }
+
+    /// A random take length within the user's range, s.
+    fn duration(&mut self) -> f64 {
+        let (lo, hi) = (self.settings.shot_min_s, self.settings.shot_max_s.max(self.settings.shot_min_s));
+        self.rng.range(lo, hi)
+    }
+
     fn is_fixed(&self, take: &Take) -> bool {
         matches!(self.shots[take.shot].path, Path::Flyby { .. } | Path::LockedOff { .. })
     }
@@ -390,19 +567,21 @@ impl Director {
         }
     }
 
-    /// `at`: mount point in the body frame, meters.
+    /// `at`: mount point from the take's origin, in its units, plus `offset_m` meters.
     fn mounted(
         &mut self,
         take: &Take,
         s: &Subject,
         at: Vec3,
+        offset_m: Vec3,
         ground: &mut dyn FnMut(Vec3) -> Option<f64>,
     ) -> CameraPose {
         let shot = &self.shots[take.shot];
         let e = ease_in_out(self.progress(take));
         let m = take.mirror;
-        let mount = at.mirror_x(m);
-        let look = (shot.look_from.lerp(shot.look_to, e) * s.size).mirror_x(m);
+        let (origin, unit) = self.origin(take, s.size);
+        let mount = origin + (at * unit + offset_m).mirror_x(m);
+        let look = origin + (shot.look_from.lerp(shot.look_to, e) * unit).mirror_x(m);
         // Aim in the body frame, then carry it through the aircraft's attitude.
         let (heading, pitch) = look_angles(look - mount);
         let local = Attitude::new(heading, pitch, shot.dutch * m);
@@ -433,20 +612,27 @@ impl Director {
             && s.agl <= shot.max_agl * s.size
             && s.speed() >= shot.min_speed
             && (!matches!(shot.path, Path::SunBehind { .. }) || self.low_sun.is_some())
-            && (shot.target == Target::Airframe || !self.engines_for(shot, s.size).is_empty())
+            && (shot.target == Target::Airframe || !self.parts_for(shot, s.size).is_empty())
     }
 
     fn still_fits(&self, take: &Take, s: &Subject) -> bool {
-        // A fixed camera stays put whatever the aircraft does, until the take ends.
-        self.is_fixed(take) || self.fits(&self.shots[take.shot], s)
+        // A fixed camera stays put whatever the aircraft does, until the take
+        // ends; an action shot follows its action through (a touchdown goes
+        // from the air to the ground).
+        self.is_fixed(take) || take.event.is_some() || self.fits(&self.shots[take.shot], s)
+    }
+
+    /// Whether the director may pick this shot at random (action shots it never does).
+    fn random_fits(&self, sh: &Shot, s: &Subject) -> bool {
+        sh.trigger.is_none() && self.fits(sh, s)
     }
 
     fn any_fit(&self, s: &Subject) -> bool {
-        self.shots.iter().any(|sh| self.fits(sh, s))
+        self.shots.iter().any(|sh| self.random_fits(sh, s))
     }
 
     fn any_enabled_fit(&self, s: &Subject) -> bool {
-        self.shots.iter().any(|sh| !self.settings.is_disabled(sh.id) && self.fits(sh, s))
+        self.shots.iter().any(|sh| !self.settings.is_disabled(sh.id) && self.random_fits(sh, s))
     }
 
     fn pick(&mut self, s: &Subject) -> usize {
@@ -456,7 +642,7 @@ impl Director {
             }
         }
         let current = self.take.map(|t| t.shot);
-        let fitting: Vec<usize> = (0..self.shots.len()).filter(|&i| self.fits(&self.shots[i], s)).collect();
+        let fitting: Vec<usize> = (0..self.shots.len()).filter(|&i| self.random_fits(&self.shots[i], s)).collect();
         let enabled: Vec<usize> =
             fitting.iter().copied().filter(|&i| !self.settings.is_disabled(self.shots[i].id)).collect();
         let fresh: Vec<usize> = enabled.iter().copied().filter(|i| !self.recent.contains(i)).collect();
@@ -464,19 +650,13 @@ impl Director {
         let pool = [fresh, not_current, enabled, fitting].into_iter().find(|p| !p.is_empty());
         let Some(pool) = pool else {
             // Nothing fits (e.g. a size/agl edge case): fall back to a shot that works anywhere.
-            return self.shots.iter().position(|sh| sh.on_ground && sh.in_air && sh.min_agl == 0.0).unwrap_or(0);
+            return self
+                .shots
+                .iter()
+                .position(|sh| sh.on_ground && sh.in_air && sh.min_agl == 0.0 && sh.trigger.is_none())
+                .unwrap_or(0);
         };
-
-        let total: f64 = pool.iter().map(|&i| self.shots[i].weight.max(0.0)).sum();
-        let mut r = self.rng.next_f64() * total;
-        let mut chosen = pool[pool.len() - 1];
-        for &i in &pool {
-            r -= self.shots[i].weight.max(0.0);
-            if r < 0.0 {
-                chosen = i;
-                break;
-            }
-        }
+        let chosen = self.weighted(&pool).unwrap_or(pool[0]);
         self.recent.push_back(chosen);
         while self.recent.len() > RECENT {
             self.recent.pop_front();
@@ -484,22 +664,26 @@ impl Director {
         chosen
     }
 
+    /// `pass_in`: for a fixed camera, when the aircraft should pass it, s
+    /// (otherwise part-way through the take).
+    #[allow(clippy::too_many_arguments)]
     fn new_take(
         &mut self,
         shot: usize,
         s: &Subject,
         frame: Attitude,
         ground: &mut dyn FnMut(Vec3) -> Option<f64>,
+        duration: f64,
+        pass_in: Option<f64>,
+        event: Option<Trigger>,
     ) -> Take {
-        let (lo, hi) = (self.settings.shot_min_s, self.settings.shot_max_s.max(self.settings.shot_min_s));
-        let duration = self.rng.range(lo, hi);
         let spec = &self.shots[shot];
         let mut two_sided = spec.mirror;
-        let candidates = self.engines_for(spec, s.size);
+        let candidates = self.parts_for(spec, s.size);
         let mut side = None;
-        let engine = (!candidates.is_empty()).then(|| {
+        let part = (!candidates.is_empty()).then(|| {
             let e = candidates[(self.rng.next_u64() % candidates.len() as u64) as usize];
-            // Film each engine from its outboard side; centreline engines from either.
+            // Film each engine or wheel from its outboard side; centreline ones from either.
             if e.x.abs() > 0.05 * s.size {
                 side = Some(e.x.signum());
                 two_sided = false;
@@ -507,7 +691,7 @@ impl Director {
             e
         });
         let take = |mirror: f64, ground: &mut dyn FnMut(Vec3) -> Option<f64>| {
-            let fixed = self.anchor(shot, s, duration, mirror, ground);
+            let fixed = self.anchor(shot, s, duration, pass_in, mirror, ground);
             Take {
                 shot,
                 start: self.clock,
@@ -515,7 +699,9 @@ impl Director {
                 mirror,
                 anchor: fixed.map(|f| f.0),
                 pass: fixed.map(|f| f.1),
-                engine,
+                part,
+                event,
+                protect_until: self.clock,
             }
         };
         if !two_sided {
@@ -559,6 +745,7 @@ impl Director {
         shot: usize,
         s: &Subject,
         duration: f64,
+        pass_in: Option<f64>,
         mirror: f64,
         ground: &mut dyn FnMut(Vec3) -> Option<f64>,
     ) -> Option<(Vec3, Vec3)> {
@@ -571,7 +758,7 @@ impl Director {
         let fwd = if speed > 1.0 { s.vel * (1.0 / speed) } else { s.att.rotate(Vec3::FORWARD) };
         let flat = fwd.horizontal().normalized_or(Vec3::FORWARD);
         let right = Vec3::new(-flat.z, 0.0, flat.x);
-        let pass = s.pos + fwd * (speed * duration * share);
+        let pass = s.pos + fwd * (speed * pass_in.unwrap_or(duration * share));
         let mut p = pass + right * (side * s.size * self.settings.distance_scale * mirror);
         if s.on_ground || on_terrain {
             let terrain = ground(p).unwrap_or(s.pos.y - s.agl);
@@ -624,14 +811,9 @@ impl Director {
         let reach = size * self.settings.distance_scale;
         let m = take.mirror;
         let formation = Attitude::new(frame.heading, frame.pitch, frame.roll * self.settings.frame_roll);
-        // Engine shots are built around the engine, in nacelle sizes.
-        let (origin, look_unit, reach) = match take.engine {
-            Some(engine) => {
-                let n = nacelle_size(size);
-                (engine, n, n * self.settings.distance_scale)
-            }
-            None => (Vec3::ZERO, size, reach),
-        };
+        // Engine and gear shots are built around the engine or wheel, in its own size.
+        let (origin, look_unit) = self.origin(take, size);
+        let reach = if take.part.is_some() { look_unit * self.settings.distance_scale } else { reach };
 
         let pos = match shot.path {
             Path::Line { from, to } => s.pos + formation.rotate(origin + from.lerp(to, e).mirror_x(m) * reach),
@@ -695,6 +877,7 @@ mod tests {
             agl: 1500.0,
             on_ground: false,
             size: 20.0,
+            systems: Systems::default(),
         }
     }
 
@@ -706,6 +889,7 @@ mod tests {
             agl: 1.5,
             on_ground: true,
             size: 20.0,
+            systems: Systems::default(),
         }
     }
 
@@ -1280,7 +1464,7 @@ mod tests {
         let slope = 3.0_f64.to_radians();
         let vel = Vec3::new(70.0 * slope.cos(), -70.0 * slope.sin(), 0.0);
         let pos = Vec3::new(0.0, 60.0, 0.0) + vel * t;
-        Subject { pos, vel, att: Attitude::new(90.0, -1.0, 0.0), agl: pos.y, on_ground: false, size: 20.0 }
+        Subject { pos, vel, att: Attitude::new(90.0, -1.0, 0.0), agl: pos.y, on_ground: false, size: 20.0, systems: Systems::default() }
     }
 
     #[test]
@@ -1341,5 +1525,259 @@ mod tests {
         let offs: Vec<f64> = (0..t.len()).map(|i| off_axis_deg(&t[i].1, level(i as f64 * DT).pos)).collect();
         assert!(offs[0] > 30.0 && offs[offs.len() - 1] > 30.0, "aircraft not outside the frame at both ends");
         assert!(offs.iter().any(|&o| o < 2.0), "aircraft never crosses the centre");
+    }
+
+    fn shot_of(d: &Director) -> &'static Shot {
+        d.current_shot().unwrap()
+    }
+
+    fn with(systems: Systems, s: Subject) -> Subject {
+        Subject { systems, ..s }
+    }
+
+    #[test]
+    fn action_shots_are_never_picked_at_random() {
+        for seed in 0..6 {
+            let mut d = Director::new(Settings::default(), seed);
+            d.set_engines(vec![Vec3::new(5.0, -1.0, -1.0), Vec3::new(-5.0, -1.0, -1.0)]);
+            for subject in [cruising as fn(f64) -> Subject, taxiing] {
+                for (_, _, id) in run(&mut d, 200.0, subject) {
+                    assert!(CATALOG.iter().find(|s| s.id == id).unwrap().trigger.is_none(), "{id} picked at random");
+                }
+            }
+        }
+    }
+
+    /// Cruising with the gear up until `before` s, then extending over 6 s.
+    fn gear_down_at(before: f64) -> impl Fn(f64) -> Subject {
+        move |t| {
+            let gear = ((t - before) / 6.0).clamp(0.0, 1.0);
+            with(Systems { gear, ..Systems::default() }, cruising(t))
+        }
+    }
+
+    #[test]
+    fn gear_extending_cuts_straight_to_a_gear_shot() {
+        for seed in 0..6 {
+            let mut d = Director::new(Settings::default(), seed);
+            let s = gear_down_at(3.0);
+            let mut t = 0.0;
+            let mut cut_at = None;
+            while t < 12.0 {
+                d.update(&s(t), DT, &mut flat);
+                if cut_at.is_none() && shot_of(&d).trigger == Some(Trigger::Gear) {
+                    cut_at = Some(t);
+                }
+                if let Some(c) = cut_at {
+                    if t - c < ACTION_MIN_TAKE_S - 2.0 * DT {
+                        assert_eq!(shot_of(&d).trigger, Some(Trigger::Gear), "gear shot cut early at {t:.2}");
+                    }
+                }
+                t += DT;
+            }
+            let c = cut_at.expect("no gear shot");
+            assert!((3.0..3.5).contains(&c), "gear shot at {c:.2} s, gear moved at 3 s");
+        }
+    }
+
+    #[test]
+    fn gear_shots_film_the_wheels() {
+        for seed in 0..6 {
+            let mut d = Director::new(Settings { pause_s: 0.0, ..Settings::default() }, seed);
+            let wheel = Vec3::new(3.0, -2.0, 0.5);
+            d.set_gear(vec![Vec3::new(0.0, -2.0, -6.0), wheel, wheel.mirror_x(-1.0)]);
+            let s = gear_down_at(1.0);
+            let mut t = 0.0;
+            while t < 6.0 {
+                let now = s(t);
+                let pose = d.update(&now, DT, &mut flat);
+                let shot = shot_of(&d);
+                if shot.trigger == Some(Trigger::Gear) && t > 2.5 {
+                    // Aimed near a wheel, not the middle of the aircraft.
+                    let near = [Vec3::new(0.0, -2.0, -6.0), wheel, wheel.mirror_x(-1.0)]
+                        .iter()
+                        .map(|w| off_axis_deg(&pose, now.pos + now.att.rotate(*w)))
+                        .fold(f64::INFINITY, f64::min);
+                    assert!(near < 25.0, "{}: wheel {near:.1}° off-axis", shot.id);
+                }
+                t += DT;
+            }
+        }
+    }
+
+    #[test]
+    fn the_nose_gear_shot_needs_a_nose_wheel() {
+        let mut d = Director::new(Settings::default(), 1);
+        let nose = CATALOG.iter().position(|s| s.id == "gear_nose").unwrap();
+        // A taildragger: two mains, one tailwheel.
+        d.set_gear(vec![Vec3::new(1.2, -1.5, -0.5), Vec3::new(-1.2, -1.5, -0.5), Vec3::new(0.0, -0.6, 5.0)]);
+        assert!(!d.supported(nose, 11.0));
+        d.set_gear(vec![Vec3::new(1.2, -1.5, 0.5), Vec3::new(-1.2, -1.5, 0.5), Vec3::new(0.0, -1.5, -3.0)]);
+        assert!(d.supported(nose, 11.0));
+    }
+
+    /// Wheel height above the runway `t` s into a landing: sinking 3.5 m/s
+    /// from 40 m, flaring below 12 m to touch at about 1 m/s.
+    fn landing_height(t: f64) -> (f64, f64) {
+        let (mut h, mut time) = (40.0_f64, 0.0);
+        let sink_at = |h: f64| if h > 12.0 { 3.5 } else { 1.0 + 2.5 * h / 12.0 };
+        let step = 0.005;
+        while time < t && h > 0.0 {
+            h -= sink_at(h) * step;
+            time += step;
+        }
+        if h <= 0.0 {
+            (0.0, 0.0)
+        } else {
+            (h, sink_at(h))
+        }
+    }
+
+    /// The landing at 70 m/s, with the reference point 2.4 m above the wheels.
+    fn landing(t: f64) -> Subject {
+        let rest = 2.4;
+        let (h, sink) = landing_height(t);
+        Subject {
+            pos: Vec3::new(70.0 * t, rest + h, 0.0),
+            vel: Vec3::new(70.0, -sink, 0.0),
+            att: Attitude::new(90.0, 2.0, 0.0),
+            agl: rest + h,
+            on_ground: h <= 0.0,
+            size: 20.0,
+            systems: Systems::default(),
+        }
+    }
+
+    fn touchdown_time() -> f64 {
+        let mut t = 0.0;
+        while !landing(t).on_ground {
+            t += DT;
+        }
+        t
+    }
+
+    #[test]
+    fn touchdown_is_filmed_from_before_the_wheels_touch_into_the_rollout() {
+        let touch = touchdown_time();
+        for seed in 0..8 {
+            let mut d = Director::new(Settings::default(), seed);
+            let mut cut_at = None;
+            let mut t = 0.0;
+            while t < touch + ROLLOUT_S - 0.5 {
+                d.update(&landing(t), DT, &mut flat);
+                let on = shot_of(&d).trigger == Some(Trigger::Touchdown);
+                if on && cut_at.is_none() {
+                    cut_at = Some(t);
+                }
+                if t >= touch - 1.0 && t <= touch + 1.0 {
+                    assert!(on, "seed {seed}: {} on screen at touchdown {:+.1} s", shot_of(&d).id, t - touch);
+                }
+                t += DT;
+            }
+            let lead = touch - cut_at.unwrap();
+            assert!((1.5..6.0).contains(&lead), "cut {lead:.1} s before touchdown");
+        }
+    }
+
+    #[test]
+    fn runway_edge_camera_stands_where_the_wheels_touch() {
+        let touch = touchdown_time();
+        let mut d = Director::new(only("touchdown_runway"), 4);
+        let mut t = 0.0;
+        let mut filmed = false;
+        while t < touch + DT {
+            let s = landing(t);
+            let pose = d.update(&s, DT, &mut flat);
+            if shot_of(&d).id == "touchdown_runway" && s.on_ground {
+                let along = s.pos.x - pose.pos.x;
+                assert!(along.abs() < 2.0 * 20.0, "aircraft {along:.0} m from abeam the camera at touchdown");
+                assert!(pose.pos.y < 2.5, "camera not on the ground: {}", pose.pos.y);
+                assert!(off_axis_deg(&pose, s.pos) < 15.0, "aircraft out of frame");
+                filmed = true;
+            }
+            t += DT;
+        }
+        assert!(filmed, "runway edge shot never filmed the touchdown");
+    }
+
+    #[test]
+    fn reversers_opening_cut_to_a_reverser_shot() {
+        let mut d = Director::new(Settings::default(), 2);
+        d.set_engines(vec![Vec3::new(5.0, -1.0, -1.0), Vec3::new(-5.0, -1.0, -1.0)]);
+        let mut cut = None;
+        for i in 0..150 {
+            let t = i as f64 * DT;
+            let reverser = ((t - 2.0) / 1.5).clamp(0.0, 1.0);
+            d.update(&with(Systems { reverser, ..Systems::default() }, taxiing(t)), DT, &mut flat);
+            if cut.is_none() && shot_of(&d).trigger == Some(Trigger::Reverser) {
+                cut = Some(t);
+            }
+        }
+        let c = cut.expect("no reverser shot");
+        assert!((2.0..2.4).contains(&c), "reverser shot at {c:.2} s");
+    }
+
+    #[test]
+    fn no_engine_data_no_reverser_shot() {
+        let mut d = Director::new(Settings::default(), 2);
+        for i in 0..150 {
+            let t = i as f64 * DT;
+            let reverser = ((t - 2.0) / 1.5).clamp(0.0, 1.0);
+            d.update(&with(Systems { reverser, ..Systems::default() }, taxiing(t)), DT, &mut flat);
+            assert!(shot_of(&d).trigger.is_none());
+        }
+    }
+
+    #[test]
+    fn an_action_waits_for_the_one_on_screen_then_plays() {
+        let mut d = Director::new(Settings::default(), 9);
+        let mut seen = Vec::new();
+        for i in 0..(14.0 / DT) as usize {
+            let t = i as f64 * DT;
+            // Flaps at 2 s, gear 1 s later.
+            let flaps = ((t - 2.0) / 4.0).clamp(0.0, 0.5);
+            let gear = ((t - 3.0) / 6.0).clamp(0.0, 1.0);
+            d.update(&with(Systems { gear, flaps, reverser: 0.0 }, cruising(t)), DT, &mut flat);
+            let trig = shot_of(&d).trigger;
+            if seen.last() != Some(&trig) {
+                seen.push(trig);
+            }
+        }
+        assert_eq!(seen[1..3], [Some(Trigger::Flaps), Some(Trigger::Gear)], "{seen:?}");
+    }
+
+    #[test]
+    fn hold_and_unticked_action_shots_are_respected() {
+        let s = gear_down_at(1.0);
+        // Held: no cut.
+        let mut d = Director::new(Settings::default(), 1);
+        d.update(&s(0.0), DT, &mut flat);
+        d.set_hold(true);
+        let held = shot_of(&d).id;
+        for i in 0..200 {
+            d.update(&s(i as f64 * DT), DT, &mut flat);
+            assert_eq!(shot_of(&d).id, held);
+        }
+        // All gear shots unticked: no gear shot.
+        let mut settings = Settings::default();
+        for id in ["gear_below", "gear_nose", "gear_cam"] {
+            settings.set_disabled(id, true);
+        }
+        let mut d = Director::new(settings, 1);
+        for i in 0..300 {
+            d.update(&s(i as f64 * DT), DT, &mut flat);
+            assert!(shot_of(&d).trigger.is_none());
+        }
+    }
+
+    #[test]
+    fn action_shots_can_be_previewed() {
+        let mut d = Director::new(Settings::default(), 1);
+        for id in ["gear_below", "flaps_window", "touchdown_chase"] {
+            let i = CATALOG.iter().position(|s| s.id == id).unwrap();
+            d.play(i);
+            d.update(&cruising(0.0), DT, &mut flat);
+            assert_eq!(shot_of(&d).id, id);
+        }
     }
 }

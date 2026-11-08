@@ -6,6 +6,7 @@
 //! wing, +y up, +z aft. Each shot moves during its take (dolly, crane, orbit,
 //! zoom creep); a static frame reads as a screenshot, not a commercial.
 
+use crate::events::Trigger;
 use crate::math::Vec3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,12 +53,24 @@ pub enum Target {
         /// where "behind the engine" is inside the cockpit).
         outboard_only: bool,
     },
+    /// Offsets are from one landing gear wheel, in wheel sizes (see
+    /// [`wheel_size`]), with +x pointing outboard from that wheel.
+    Gear {
+        /// The nose gear instead of a main gear.
+        nose: bool,
+    },
 }
 
 /// Rough nacelle / propeller diameter for an aircraft `size` meters across:
 /// about 1.2 m on a Cessna, 2 m on an A320, 2.8 m on a 747.
 pub fn nacelle_size(size: f64) -> f64 {
     0.35 * size.max(1.0).sqrt()
+}
+
+/// Rough main wheel diameter for an aircraft `size` meters across: about
+/// 0.6 m on a Cessna, 1 m on an A320, 1.4 m on a 747.
+pub fn wheel_size(size: f64) -> f64 {
+    0.18 * size.max(1.0).sqrt()
 }
 
 /// How shots are grouped in the settings window.
@@ -69,16 +82,19 @@ pub enum Group {
     CloseUp,
     /// Mounted, overhead and fixed cameras.
     Special,
+    /// Filmed only when something happens: gear, flaps, touchdown, reversers.
+    Action,
 }
 
 impl Group {
-    pub const ALL: [Group; 3] = [Group::CameraShip, Group::CloseUp, Group::Special];
+    pub const ALL: [Group; 4] = [Group::CameraShip, Group::CloseUp, Group::Special, Group::Action];
 
     pub fn title(self) -> &'static str {
         match self {
             Group::CameraShip => "Camera plane",
             Group::CloseUp => "Close-ups",
             Group::Special => "Special cameras",
+            Group::Action => "Action shots",
         }
     }
 }
@@ -121,6 +137,9 @@ pub struct Shot {
     pub mirror: bool,
     /// Relative probability of being picked.
     pub weight: f64,
+    /// Action shots: only filmed, straight away, when this happens. Never
+    /// picked at random.
+    pub trigger: Option<Trigger>,
 }
 
 const fn v(x: f64, y: f64, z: f64) -> Vec3 {
@@ -148,6 +167,7 @@ const BASE: Shot = Shot {
     min_speed: 0.0,
     mirror: true,
     weight: 1.0,
+    trigger: None,
 };
 
 pub const CATALOG: &[Shot] = &[
@@ -609,6 +629,157 @@ pub const CATALOG: &[Shot] = &[
         weight: 0.6,
         ..BASE
     },
+    // Action shots: never picked at random, cut to the moment it happens.
+    Shot {
+        id: "gear_below",
+        name: "Gear: from below",
+        group: Group::Action,
+        blurb: "Gear moving: under the wing, looking up at the main gear",
+        // Below, outboard and ahead of a main wheel, drifting aft as the
+        // gear swings down out of (or up into) its bay.
+        path: Path::Line { from: v(2.6, -3.4, -2.8), to: v(2.9, -2.9, 0.4) },
+        target: Target::Gear { nose: false },
+        look_from: v(0.0, 0.6, 0.0),
+        look_to: v(0.0, 0.4, 0.1),
+        zoom: (1.2, 1.3),
+        dutch: 3.0,
+        on_ground: false,
+        min_agl: 0.5,
+        trigger: Some(Trigger::Gear),
+        ..BASE
+    },
+    Shot {
+        id: "gear_nose",
+        name: "Gear: nose gear",
+        group: Group::Action,
+        blurb: "Gear moving: ahead and below the nose gear",
+        path: Path::Line { from: v(1.4, -3.0, -5.0), to: v(1.0, -2.4, -4.0) },
+        target: Target::Gear { nose: true },
+        look_from: v(0.0, 0.6, 0.0),
+        look_to: v(0.0, 0.4, 0.0),
+        zoom: (1.3, 1.4),
+        on_ground: false,
+        min_agl: 0.5,
+        trigger: Some(Trigger::Gear),
+        ..BASE
+    },
+    Shot {
+        id: "gear_cam",
+        name: "Gear: wheel-well cam",
+        group: Group::Action,
+        blurb: "Gear moving: rigid camera under the wing, looking back at the main gear",
+        // On a short stick under the wing, outboard of and ahead of the
+        // wheel, looking back up into the bay.
+        path: Path::Mount { at: v(1.2, -0.3, -1.8), offset_m: Vec3::ZERO },
+        target: Target::Gear { nose: false },
+        look_from: v(0.0, 0.6, 0.2),
+        look_to: v(0.0, 0.5, 0.2),
+        fov_deg: Some(90.0),
+        bank_follow: 0.0,
+        trigger: Some(Trigger::Gear),
+        ..BASE
+    },
+    Shot {
+        id: "flaps_window",
+        name: "Flaps: window seat",
+        group: Group::Action,
+        blurb: "Flaps moving: from the cabin, looking out at the trailing edge",
+        // A passenger's view: just outside the fuselage above the wing root,
+        // looking out and down at the inboard flap.
+        path: Path::Mount { at: v(0.075, 0.03, 0.12), offset_m: v(0.35, 0.0, 0.0) },
+        look_from: v(0.3, -0.03, 0.07),
+        look_to: v(0.3, -0.03, 0.08),
+        fov_deg: Some(75.0),
+        bank_follow: 0.0,
+        trigger: Some(Trigger::Flaps),
+        ..BASE
+    },
+    Shot {
+        id: "flaps_behind",
+        name: "Flaps: trailing edge",
+        group: Group::Action,
+        blurb: "Flaps moving: from behind and above the wing",
+        path: Path::Line { from: v(0.6, 0.25, 0.95), to: v(0.5, 0.2, 0.65) },
+        look_from: v(0.3, -0.03, 0.06),
+        look_to: v(0.28, -0.03, 0.05),
+        zoom: (1.6, 1.8),
+        dutch: 2.0,
+        trigger: Some(Trigger::Flaps),
+        ..BASE
+    },
+    Shot {
+        id: "touchdown_runway",
+        name: "Touchdown: runway edge",
+        group: Group::Action,
+        blurb: "Landing: standing at the runway edge where the wheels touch",
+        // A photographer crouched by the runway at the touchdown point,
+        // tight on the main gear as it meets the ground.
+        path: Path::Flyby { side: 1.1, height: 0.0, on_terrain: true },
+        target: Target::Gear { nose: false },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (2.4, 2.0),
+        bank_follow: 0.0,
+        trigger: Some(Trigger::Touchdown),
+        ..BASE
+    },
+    Shot {
+        id: "touchdown_gear_cam",
+        name: "Touchdown: gear cam",
+        group: Group::Action,
+        blurb: "Landing: rigid camera beside the main wheels as they hit the runway",
+        path: Path::Mount { at: v(1.0, 0.2, -1.6), offset_m: Vec3::ZERO },
+        target: Target::Gear { nose: false },
+        look_from: v(0.0, -0.5, 0.3),
+        look_to: v(0.0, -0.5, 0.3),
+        fov_deg: Some(85.0),
+        bank_follow: 0.0,
+        trigger: Some(Trigger::Touchdown),
+        ..BASE
+    },
+    Shot {
+        id: "touchdown_chase",
+        name: "Touchdown: low chase",
+        group: Group::Action,
+        blurb: "Landing: low behind the main gear, following it onto the runway",
+        path: Path::Line { from: v(2.0, -0.2, 4.0), to: v(2.3, 0.1, 6.0) },
+        target: Target::Gear { nose: false },
+        look_from: v(0.0, -0.3, 0.0),
+        look_to: v(0.0, -0.3, 0.0),
+        zoom: (1.7, 1.9),
+        bank_follow: 0.2,
+        trigger: Some(Trigger::Touchdown),
+        ..BASE
+    },
+    Shot {
+        id: "reverser_side",
+        name: "Reverser: nacelle",
+        group: Group::Action,
+        blurb: "Reversers opening: outboard of the engine, on the aft nacelle",
+        path: Path::Line { from: v(3.0, -0.3, -0.6), to: v(3.0, -0.2, 0.5) },
+        target: Target::Engine { outboard_only: false },
+        look_from: v(0.0, 0.0, 0.5),
+        look_to: v(0.0, 0.0, 0.7),
+        zoom: (1.4, 1.5),
+        trigger: Some(Trigger::Reverser),
+        ..BASE
+    },
+    Shot {
+        id: "reverser_window",
+        name: "Reverser: cabin window",
+        group: Group::Action,
+        blurb: "Reversers opening: from the fuselage, looking out at the engine",
+        // Inboard of and ahead of the engine, by the fuselage, looking out
+        // and back at the nacelle as the reverser opens.
+        path: Path::Mount { at: v(-1.4, 0.6, -1.2), offset_m: Vec3::ZERO },
+        target: Target::Engine { outboard_only: true },
+        look_from: v(0.0, 0.0, 0.5),
+        look_to: v(0.0, 0.0, 0.6),
+        fov_deg: Some(70.0),
+        bank_follow: 0.0,
+        trigger: Some(Trigger::Reverser),
+        ..BASE
+    },
 ];
 
 #[cfg(test)]
@@ -625,6 +796,15 @@ mod tests {
 
     #[test]
     fn some_shot_works_anywhere() {
-        assert!(CATALOG.iter().any(|s| s.in_air && s.on_ground && s.min_agl == 0.0 && s.min_speed == 0.0));
+        assert!(CATALOG
+            .iter()
+            .any(|s| s.in_air && s.on_ground && s.min_agl == 0.0 && s.min_speed == 0.0 && s.trigger.is_none()));
+    }
+
+    #[test]
+    fn action_shots_are_exactly_the_triggered_ones() {
+        for s in CATALOG {
+            assert_eq!(s.group == Group::Action, s.trigger.is_some(), "{}", s.id);
+        }
     }
 }

@@ -30,7 +30,7 @@ CI builds Windows, Linux and a universal (Intel + Apple Silicon) macOS binary on
 **The Camship window** is a floating X-Plane window that follows X-Plane's UI scale, and you can pop it out.
 
 - **Header:** Start/Stop, the shot on screen, **Next shot**, and **Hold** (the move plays back and forth instead of ending).
-- **Shots:** every shot, with a tick box and a one-line description, in three groups: *Camera plane*, *Close-ups* and *Special cameras*. Each group, and the whole list, has **All**/**None** buttons. The **play** button cuts to that shot straight away, even if it's unticked, so you can preview it. Unticking the shot on screen moves on to the next one. Engine shots are greyed out on aircraft that don't report engine positions.
+- **Shots:** every shot, with a tick box and a one-line description, in four groups: *Camera plane*, *Close-ups*, *Special cameras* and *Action shots*. Each group, and the whole list, has **All**/**None** buttons. The **play** button cuts to that shot straight away, even if it's unticked, so you can preview it. Unticking the shot on screen moves on to the next one. Engine shots are greyed out on aircraft that don't report engine positions.
 - **Camera:** take length, distance, zoom, turn lag, and the pause: how long the camera holds still at the start of each shot before it moves (with Hold on, it also pauses at each end), and whether to keep filming while the sim is paused. **Defaults** resets these but keeps your shot list.
 
 Changes apply immediately and are saved by themselves.
@@ -76,6 +76,19 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 | Under the approach | air, low (≤ 4 sizes up, ≥ 25 m/s) | standing on the ground almost right under the flight path, looking up as the aircraft passes overhead |
 | Drone reveal | air, ground | a rising drone ahead and to the side, its lens tilting up from the scenery until it finds the aircraft |
 | Locked-off frame | air, ground (≥ 25 m/s) | a camera on a tripod beside the track that never pans: the aircraft enters the frame, crosses it and leaves |
+
+### Action shots
+
+Action shots are never picked at random. When one of these things happens, Camship cuts straight to one of its shots, chosen at random among the ticked ones, and lets the moment play out before anything else interrupts it. With **Hold** on, it stays on your shot.
+
+| Action | Detected when | Shots |
+|---|---|---|
+| Gear | the gear starts to extend or retract (`sim/flightmodel2/gear/deploy_ratio`) | *from below* (under the wing, looking up at a main gear), *nose gear* (ahead and below it), *wheel-well cam* (rigid, under the wing, looking back into the bay) |
+| Flaps | the flaps start to move, at each stage (`flap1_deploy_ratio`) | *window seat* (a passenger's view of the inboard flap), *trailing edge* (from behind and above the wing) |
+| Touchdown | the wheels are about 2.5 s from the runway at the current sink rate (predicted, so the camera is in place before they touch) | *runway edge* (a photographer by the runway at the touchdown point, tight on the main gear), *gear cam* (rigid, beside the main wheels), *low chase* (low behind the main gear) |
+| Reversers | a thrust reverser opens (`thrust_reverser_deploy_ratio`) | *nacelle* (outboard of the engine), *cabin window* (from the fuselage, looking out at the engine) |
+
+Gear shots use the wheel positions the aircraft reports (`sim/flightmodel/parts/tire_*_no_deflection`), and a typical layout if it doesn't report any. The nose gear shot is skipped on taildraggers. Reverser shots need engine positions. `Log.txt` lists each action and the shot that filmed it, or why it was missed.
 
 What makes it feel filmed rather than computed:
 
