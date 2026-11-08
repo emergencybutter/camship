@@ -22,6 +22,8 @@ pub struct Settings {
     pub zoom_scale: f64,
     /// Keep the camera moving while the sim is paused ("bullet time").
     pub film_when_paused: bool,
+    /// Cut to action shots when gear, flaps, touchdown etc. happen.
+    pub action_shots: bool,
     /// Shot ids the director must never pick.
     pub disabled_shots: Vec<String>,
 }
@@ -39,6 +41,7 @@ impl Default for Settings {
             subject_size_m: 0.0,
             zoom_scale: 1.0,
             film_when_paused: true,
+            action_shots: true,
             disabled_shots: Vec::new(),
         }
     }
@@ -93,6 +96,7 @@ impl Settings {
                 "subject_size_m" => set!(subject_size_m, num(0.0, 200.0)),
                 "zoom_scale" => set!(zoom_scale, num(0.2, 5.0)),
                 "film_when_paused" => set!(film_when_paused, flag()),
+                "action_shots" => set!(action_shots, flag()),
                 "disabled_shots" => {
                     s.disabled_shots = value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(String::from).collect()
                 }
@@ -110,7 +114,7 @@ impl Settings {
             "# Camship preferences. Edit while X-Plane is not running.\n\
              shot_min_s {}\nshot_max_s {}\npause_s {}\ndistance_scale {}\n\
              formation_lag_s {}\nframe_roll {}\nground_clearance_m {}\nsubject_size_m {}\n\
-             zoom_scale {}\nfilm_when_paused {}\ndisabled_shots {}\n",
+             zoom_scale {}\nfilm_when_paused {}\naction_shots {}\ndisabled_shots {}\n",
             self.shot_min_s,
             self.shot_max_s,
             self.pause_s,
@@ -121,6 +125,7 @@ impl Settings {
             self.subject_size_m,
             self.zoom_scale,
             if self.film_when_paused { 1 } else { 0 },
+            if self.action_shots { 1 } else { 0 },
             self.disabled_shots.join(","),
         )
     }
@@ -132,7 +137,7 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let mut s = Settings { pause_s: 2.5, distance_scale: 2.5, film_when_paused: false, ..Settings::default() };
+        let mut s = Settings { pause_s: 2.5, distance_scale: 2.5, film_when_paused: false, action_shots: false, ..Settings::default() };
         s.set_disabled("belly", true);
         s.set_disabled("flyby", true);
         assert_eq!(Settings::parse(&s.to_text()), s);

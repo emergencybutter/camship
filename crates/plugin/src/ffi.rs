@@ -186,6 +186,7 @@ extern "C" {
     pub fn XPLMGetDataf(r: XPLMDataRef) -> c_float;
     pub fn XPLMGetDatad(r: XPLMDataRef) -> f64;
     pub fn XPLMGetDatavf(r: XPLMDataRef, out: *mut c_float, offset: c_int, max: c_int) -> c_int;
+    pub fn XPLMGetDatavi(r: XPLMDataRef, out: *mut c_int, offset: c_int, max: c_int) -> c_int;
 
     // XPLMProcessing
     pub fn XPLMRegisterFlightLoopCallback(f: XPLMFlightLoop_f, interval: c_float, refcon: *mut c_void);

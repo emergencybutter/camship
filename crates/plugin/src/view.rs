@@ -168,9 +168,18 @@ fn shots(ui: &mut Ui, vm: &mut ViewModel, actions: &mut Vec<Action>, cap_height:
         let mut list = |ui: &mut Ui| {
             for group in Group::ALL {
                 ui.add_space(4.0);
+                let active = group != Group::Action || vm.settings.action_shots;
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(group.title()).color(ACCENT).strong());
+                    if group == Group::Action {
+                        ui.checkbox(&mut vm.settings.action_shots, RichText::new(group.title()).color(ACCENT).strong())
+                            .on_hover_text("Cut to these shots when it happens: gear, flaps, touchdown, takeoff...");
+                    } else {
+                        ui.label(RichText::new(group.title()).color(ACCENT).strong());
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if !active {
+                            ui.disable();
+                        }
                         let members = vm.shots.iter().filter(|s| s.group == group);
                         if ui.small_button("None").clicked() {
                             members.clone().for_each(|s| vm.settings.set_disabled(s.id, true));
@@ -180,9 +189,11 @@ fn shots(ui: &mut Ui, vm: &mut ViewModel, actions: &mut Vec<Action>, cap_height:
                         }
                     });
                 });
-                for (i, shot) in vm.shots.iter().enumerate().filter(|(_, s)| s.group == group) {
-                    shot_row(ui, vm, i, shot, actions);
-                }
+                ui.add_enabled_ui(active, |ui| {
+                    for (i, shot) in vm.shots.iter().enumerate().filter(|(_, s)| s.group == group) {
+                        shot_row(ui, vm, i, shot, actions);
+                    }
+                });
             }
         };
         if cap_height {

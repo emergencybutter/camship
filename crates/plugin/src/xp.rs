@@ -66,6 +66,14 @@ impl DataRef {
         out.truncate(got.max(0) as usize);
         out
     }
+
+    /// The first `n` elements of an int array dataref.
+    pub fn i32s(self, n: usize) -> Vec<i32> {
+        let mut out = vec![0 as c_int; n];
+        let got = unsafe { XPLMGetDatavi(self.0, out.as_mut_ptr(), 0, n as c_int) };
+        out.truncate(got.max(0) as usize);
+        out
+    }
 }
 
 /// Runs an X-Plane command once, by name. Returns false if it doesn't exist.

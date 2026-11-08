@@ -79,7 +79,7 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 
 ### Action shots
 
-Action shots are never picked at random. When one of these things happens, Camship cuts straight to one of its shots, chosen at random among the ticked ones, and lets the moment play out before anything else interrupts it. With **Hold** on, it stays on your shot.
+Action shots are never picked at random. When one of these things happens, Camship cuts straight to one of its shots, chosen at random among the ticked ones, and lets the moment play out before anything else interrupts it. If two happen together, the one that's over sooner wins (a touchdown beats the reversers, which beat the flaps). With **Hold** on, it stays on your shot. Untick **Action shots** in the group header to switch them all off (`action_shots 0` in `camship.prf`).
 
 | Action | Detected when | Shots |
 |---|---|---|
@@ -87,8 +87,18 @@ Action shots are never picked at random. When one of these things happens, Camsh
 | Flaps | the flaps start to move, at each stage (`flap1_deploy_ratio`) | *window seat* (a passenger's view of the inboard flap), *trailing edge* (from behind and above the wing) |
 | Touchdown | the wheels are about 2.5 s from the runway at the current sink rate (predicted, so the camera is in place before they touch) | *runway edge* (a photographer by the runway at the touchdown point, tight on the main gear), *gear cam* (rigid, beside the main wheels), *low chase* (low behind the main gear) |
 | Reversers | a thrust reverser opens (`thrust_reverser_deploy_ratio`) | *nacelle* (outboard of the engine), *cabin window* (from the fuselage, looking out at the engine) |
+| Takeoff roll | accelerating harder than 1.2 m/s² past 12 m/s on the ground, after being nearly stopped | *runway edge* (long lens from the edge ahead, the aircraft charging past), *from behind* (low, far behind, long lens) |
+| Rotation | on the ground above 20 m/s, still accelerating, the nose coming up faster than 1.5°/s (also on a touch-and-go) | *runway edge* (the aircraft lifts off as it passes), *gear cam* (the wheels leaving the runway), *chase* (low behind as it pulls up) |
+| Ground spoilers | the spoilers go past half on the ground (`speedbrake_ratio`) | *window seat* (looking out over the wing), *above the wing* |
+| Go-around | climbing faster than 2.5 m/s for a second, low, within 20 s of descending close to the ground | *climb-out* (long lens from behind), *under the climb* (standing under the flight path) |
+| Steep turn | banked past 45° for a second | *high outside* (above the high wing, horizon level), *down the low wing* (rigid on the fin, looking down the low wing at the ground) |
+| Engine start | an engine starts burning fuel (`engine_is_burning_fuel`) | *intake* and *cabin window*, both on the engine that started |
+| Landing lights | the landing lights come on, with the sun under 8° (dusk, night) | *head-on* (looking into the lights), *front quarter* |
+| Doors | a door or the canopy opens while parked (`door_open_ratio`, `canopy_open_ratio`) | *cabin door* (beside the forward fuselage, left side) |
+| Pushback | rolling backwards for a second | *from the ramp* (high, ahead and to the side) |
+| Shutdown | the last engine stops, parked | *pull back* (a 10 s pull back and up to end the flight) |
 
-Gear shots use the wheel positions the aircraft reports (`sim/flightmodel/parts/tire_*_no_deflection`), and a typical layout if it doesn't report any. The nose gear shot is skipped on taildraggers. Reverser shots need engine positions. `Log.txt` lists each action and the shot that filmed it, or why it was missed.
+Gear shots use the wheel positions the aircraft reports (`sim/flightmodel/parts/tire_*_no_deflection`), and a typical layout if it doesn't report any. The nose gear shot is skipped on taildraggers. Reverser and engine-start shots need engine positions. Some add-on aircraft animate their doors with their own datarefs, which Camship can't see. `Log.txt` lists each action and the shot that filmed it, or why it was missed.
 
 What makes it feel filmed rather than computed:
 

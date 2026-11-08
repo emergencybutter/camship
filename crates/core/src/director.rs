@@ -60,6 +60,12 @@ const ACTION_MIN_S: f64 = 4.0;
 const ACTION_MIN_TAKE_S: f64 = 6.0;
 /// After the wheels touch, the touchdown shot stays on the rollout this long, s.
 const ROLLOUT_S: f64 = 3.5;
+/// After the nose comes up, the aircraft passes a fixed camera this much later, s.
+const LIFTOFF_PASS_S: f64 = 2.5;
+/// The last shot of a flight: engines off, a long slow pull-back, s.
+const SHUTDOWN_TAKE_S: f64 = 10.0;
+/// Landing lights are only worth filming with the sun this low, degrees.
+const LIGHTS_MAX_SUN: f64 = 8.0;
 /// The touchdown shot can't be cut until this long after the wheels touch, s.
 const TOUCHDOWN_HOLD_S: f64 = 1.5;
 /// An action that couldn't be filmed straight away (another action was on
@@ -161,6 +167,10 @@ pub struct Director {
     requested_take: Option<f64>,
     /// Engine positions in the body frame, meters from the reference point.
     engines: Vec<Vec3>,
+    /// X-Plane's engine index for each of `engines`.
+    engine_slots: Vec<usize>,
+    /// The sun's elevation, degrees, if known.
+    sun_elevation: Option<f64>,
     /// Wheel positions in the body frame, meters; empty if unknown.
     gear: Vec<Vec3>,
     detector: Detector,
@@ -192,6 +202,8 @@ impl Director {
             requested: None,
             requested_take: None,
             engines: Vec::new(),
+            engine_slots: Vec::new(),
+            sun_elevation: None,
             gear: Vec::new(),
             detector: Detector::default(),
             pending: None,
@@ -274,7 +286,16 @@ impl Director {
     /// Engine positions (body frame, meters; +x right, +y up, +z aft).
     /// Engine shots are only picked when this is not empty.
     pub fn set_engines(&mut self, engines: Vec<Vec3>) {
+        self.engine_slots = (0..engines.len()).collect();
         self.engines = engines;
+    }
+
+    /// X-Plane's engine index for each engine given to `set_engines`, when
+    /// some were left out, so an engine start films the right one.
+    pub fn set_engine_slots(&mut self, slots: Vec<usize>) {
+        if slots.len() == self.engines.len() {
+            self.engine_slots = slots;
+        }
     }
 
     /// The user's horizontal field of view in degrees, so shots with a fixed
@@ -301,6 +322,7 @@ impl Director {
             let (h, p) = (heading.to_radians(), elevation.to_radians());
             Vec3::new(h.sin() * p.cos(), p.sin(), -h.cos() * p.cos())
         });
+        self.sun_elevation = elevation.is_finite().then_some(elevation);
         self.sun = dir.filter(|_| (SUN_MIN_ELEVATION..=SUN_MAX_ELEVATION).contains(&elevation));
         self.low_sun = dir.filter(|_| (SILHOUETTE_MIN_ELEVATION..=SILHOUETTE_MAX_ELEVATION).contains(&elevation));
     }
@@ -448,8 +470,8 @@ impl Director {
         }
     }
 
-    /// Watches for actions (gear, flaps, touchdown, reversers) and cuts to
-    /// an action shot for one. Returns whether it cut.
+    /// Watches for actions (gear, flaps, touchdown, ...) and cuts to an
+    /// action shot for one. Returns whether it cut.
     fn action(
         &mut self,
         s: &Subject,
@@ -458,10 +480,20 @@ impl Director {
         ground: &mut dyn FnMut(Vec3) -> Option<f64>,
     ) -> bool {
         let rest = self.rest_height(s.size);
-        if let Some(event) = self.detector.update(s, dt, rest) {
+        // Always watched, so switching action shots on doesn't fire on
+        // whatever changed while they were off.
+        let events = self.detector.update(s, dt, rest);
+        if !self.settings.action_shots {
+            self.pending = None;
+            return false;
+        }
+        for event in events {
+            if event.trigger == Trigger::Lights && self.sun_elevation.is_some_and(|e| e > LIGHTS_MAX_SUN) {
+                continue;
+            }
             self.notes.push(format!("{} {}", event.trigger.label(), event.what));
-            // Nothing bumps a touchdown that's still waiting.
-            if self.pending.is_none_or(|p| p.event.trigger != Trigger::Touchdown || event.trigger == Trigger::Touchdown) {
+            // A more important action that's still waiting stays.
+            if self.pending.is_none_or(|p| event.trigger.priority() >= p.event.trigger.priority()) {
                 self.pending = Some(Pending { event, at: self.clock });
             }
         }
@@ -487,9 +519,11 @@ impl Director {
         };
         let (duration, pass_in, protect) = match p.event.trigger {
             Trigger::Touchdown => (in_s + ROLLOUT_S, Some(in_s), in_s + TOUCHDOWN_HOLD_S),
+            Trigger::Rotation => (self.duration().max(ACTION_MIN_TAKE_S), Some(LIFTOFF_PASS_S), ACTION_MIN_S + 1.0),
+            Trigger::Shutdown => (SHUTDOWN_TAKE_S, None, SHUTDOWN_TAKE_S),
             _ => (self.duration().max(ACTION_MIN_TAKE_S), None, ACTION_MIN_S),
         };
-        let mut take = self.new_take(shot, s, frame, ground, duration, pass_in, Some(p.event.trigger));
+        let mut take = self.new_take(shot, s, frame, ground, duration, pass_in, Some(&p.event));
         take.protect_until = self.clock + protect.min(duration);
         self.take = Some(take);
         self.requested_take = None;
@@ -675,12 +709,24 @@ impl Director {
         ground: &mut dyn FnMut(Vec3) -> Option<f64>,
         duration: f64,
         pass_in: Option<f64>,
-        event: Option<Trigger>,
+        event: Option<&Event>,
     ) -> Take {
         let spec = &self.shots[shot];
         let mut two_sided = spec.mirror;
-        let candidates = self.parts_for(spec, s.size);
+        let mut candidates = self.parts_for(spec, s.size);
+        // An engine start films the engine that started, if this shot can.
+        if let (Target::Engine { .. }, Some(slot)) = (spec.target, event.and_then(|e| e.engine)) {
+            let started = self.engine_slots.iter().position(|&k| k == slot).map(|i| self.engines[i]);
+            if let Some(e) = started.filter(|e| candidates.contains(e)) {
+                candidates = vec![e];
+            }
+        }
         let mut side = None;
+        // An action that says which side to film from (the low wing in a turn).
+        if let Some(forced) = event.and_then(|e| e.side) {
+            side = Some(forced);
+            two_sided = false;
+        }
         let part = (!candidates.is_empty()).then(|| {
             let e = candidates[(self.rng.next_u64() % candidates.len() as u64) as usize];
             // Film each engine or wheel from its outboard side; centreline ones from either.
@@ -700,7 +746,7 @@ impl Director {
                 anchor: fixed.map(|f| f.0),
                 pass: fixed.map(|f| f.1),
                 part,
-                event,
+                event: event.map(|e| e.trigger),
                 protect_until: self.clock,
             }
         };
@@ -1737,7 +1783,7 @@ mod tests {
             // Flaps at 2 s, gear 1 s later.
             let flaps = ((t - 2.0) / 4.0).clamp(0.0, 0.5);
             let gear = ((t - 3.0) / 6.0).clamp(0.0, 1.0);
-            d.update(&with(Systems { gear, flaps, reverser: 0.0 }, cruising(t)), DT, &mut flat);
+            d.update(&with(Systems { gear, flaps, ..Systems::default() }, cruising(t)), DT, &mut flat);
             let trig = shot_of(&d).trigger;
             if seen.last() != Some(&trig) {
                 seen.push(trig);
@@ -1778,6 +1824,79 @@ mod tests {
             d.play(i);
             d.update(&cruising(0.0), DT, &mut flat);
             assert_eq!(shot_of(&d).id, id);
+        }
+    }
+
+    #[test]
+    fn action_shots_switched_off_never_cut() {
+        let mut d = Director::new(Settings { action_shots: false, ..Settings::default() }, 1);
+        let s = gear_down_at(1.0);
+        for i in 0..300 {
+            d.update(&s(i as f64 * DT), DT, &mut flat);
+            assert!(shot_of(&d).trigger.is_none());
+        }
+        // Switched back on mid-move: no stale gear shot.
+        d.settings_mut().action_shots = true;
+        for i in 300..400 {
+            d.update(&s(i as f64 * DT), DT, &mut flat);
+            assert!(shot_of(&d).trigger.is_none());
+        }
+    }
+
+    #[test]
+    fn engine_start_films_the_engine_that_started() {
+        let engines = vec![Vec3::new(-5.0, -1.0, -1.0), Vec3::new(5.0, -1.0, -1.0)];
+        for seed in 0..8 {
+            let mut d = Director::new(Settings { formation_lag_s: 0.0, ..Settings::default() }, seed);
+            d.set_engines(engines.clone());
+            let parked = |running: u16| with(Systems { engines_running: running, ..Systems::default() }, parked_below_ground(0.0));
+            d.update(&parked(0), DT, &mut flat);
+            // Engine 2 (index 1, the right one) lights.
+            let mut pose = d.update(&parked(0b10), DT, &mut flat);
+            assert_eq!(shot_of(&d).trigger, Some(Trigger::EngineStart));
+            for _ in 0..60 {
+                pose = d.update(&parked(0b10), DT, &mut flat);
+            }
+            let s = parked(0b10);
+            let right = off_axis_deg(&pose, s.pos + s.att.rotate(engines[1]));
+            let left = off_axis_deg(&pose, s.pos + s.att.rotate(engines[0]));
+            assert!(right < left, "seed {seed} ({}): filming the wrong engine", shot_of(&d).id);
+        }
+    }
+
+    #[test]
+    fn steep_turn_films_from_the_low_wing_side() {
+        for bank in [-55.0, 55.0] {
+            let mut d = Director::new(only("turn_fin"), 1);
+            let banked = |t: f64| Subject { att: Attitude::new(90.0, 0.0, if t < 1.0 { 0.0 } else { bank }), ..cruising(t) };
+            let mut pose = None;
+            for i in 0..90 {
+                let p = d.update(&banked(i as f64 * DT), DT, &mut flat);
+                if shot_of(&d).id == "turn_fin" {
+                    pose = Some(p);
+                }
+            }
+            let pose = pose.expect("no steep turn shot");
+            let s = banked(3.0);
+            // Aimed at the low wing's side of the aircraft.
+            let right = s.att.rotate(Vec3::new(1.0, 0.0, 0.0));
+            let side = aim_of(&pose).dot(right);
+            assert!(side * bank > 0.0, "bank {bank}: looking {side:+.2} to the right");
+        }
+    }
+
+    #[test]
+    fn landing_lights_are_only_filmed_in_low_light() {
+        for (sun, filmed) in [(40.0, false), (2.0, true)] {
+            let mut d = Director::new(Settings::default(), 1);
+            d.set_sun(200.0, sun);
+            let mut seen = false;
+            for i in 0..60 {
+                let lights = if i < 10 { 0.0 } else { 1.0 };
+                d.update(&with(Systems { landing_lights: lights, ..Systems::default() }, cruising(i as f64 * DT)), DT, &mut flat);
+                seen |= shot_of(&d).trigger == Some(Trigger::Lights);
+            }
+            assert_eq!(seen, filmed, "sun at {sun}°");
         }
     }
 }

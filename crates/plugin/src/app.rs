@@ -153,6 +153,12 @@ struct Refs {
     gear_deploy: Option<DataRef>,
     flaps: Option<DataRef>,
     reversers: Option<DataRef>,
+    speedbrake: Option<DataRef>,
+    landing_lights: Option<DataRef>,
+    landing_light_switch: Option<DataRef>,
+    doors: Option<DataRef>,
+    canopy: Option<DataRef>,
+    engines_burning: Option<DataRef>,
     /// Wheel positions, body frame, meters.
     wheel_x: Option<DataRef>,
     wheel_y: Option<DataRef>,
@@ -188,6 +194,12 @@ impl Refs {
             gear_deploy: f("sim/flightmodel2/gear/deploy_ratio"),
             flaps: f("sim/flightmodel2/controls/flap1_deploy_ratio").or_else(|| f("sim/flightmodel/controls/flaprat")),
             reversers: f("sim/flightmodel2/engines/thrust_reverser_deploy_ratio"),
+            speedbrake: f("sim/flightmodel2/controls/speedbrake_ratio"),
+            landing_lights: f("sim/flightmodel2/lights/landing_lights_brightness_ratio"),
+            landing_light_switch: f("sim/cockpit2/switches/landing_lights_on"),
+            doors: f("sim/flightmodel2/misc/door_open_ratio"),
+            canopy: f("sim/flightmodel2/misc/canopy_open_ratio"),
+            engines_burning: f("sim/flightmodel2/engines/engine_is_burning_fuel"),
             wheel_x: f("sim/flightmodel/parts/tire_x_no_deflection"),
             wheel_y: f("sim/flightmodel/parts/tire_y_no_deflection"),
             wheel_z: f("sim/flightmodel/parts/tire_z_no_deflection"),
@@ -216,11 +228,21 @@ impl Refs {
         };
         let n_engines = self.num_engines.map_or(0, |n| n.i32().clamp(0, 16) as usize);
         let d = Systems::default();
+        let lights = max(self.landing_lights, 16)
+            .or_else(|| self.landing_light_switch.map(|r| if r.i32() != 0 { 1.0 } else { 0.0 }));
+        let doors = [max(self.doors, 20), self.canopy.map(|r| r.f32() as f64)].into_iter().flatten().reduce(f64::max);
+        let engines_running = self.engines_burning.map_or(0, |r| {
+            r.i32s(n_engines).iter().enumerate().filter(|(_, &on)| on != 0).fold(0u16, |bits, (i, _)| bits | 1 << i)
+        });
         Systems {
             // The first wheel to move: extending starts with it, retracting ends with it.
             gear: max(self.gear_deploy, 10).unwrap_or(d.gear),
             flaps: self.flaps.map_or(d.flaps, |r| r.f32() as f64),
             reverser: max(self.reversers, n_engines).unwrap_or(d.reverser),
+            speedbrake: self.speedbrake.map_or(d.speedbrake, |r| r.f32() as f64),
+            landing_lights: lights.unwrap_or(d.landing_lights),
+            doors: doors.unwrap_or(d.doors),
+            engines_running,
         }
     }
 
@@ -237,19 +259,20 @@ impl Refs {
             .collect()
     }
 
-    /// Engine positions, body frame, meters from the CG (+x right, +y up, +z aft).
-    fn engines(&self) -> Vec<Vec3> {
+    /// Engine positions, body frame, meters from the CG (+x right, +y up,
+    /// +z aft), with X-Plane's index for each.
+    fn engines(&self) -> Vec<(usize, Vec3)> {
         let (Some(n), Some(x), Some(y), Some(z)) = (self.num_engines, self.engine_x, self.engine_y, self.engine_z) else {
             return Vec::new();
         };
         let n = n.i32().clamp(0, 16) as usize;
         let (xs, ys, zs) = (x.f32s(n), y.f32s(n), z.f32s(n));
-        let engines: Vec<Vec3> = (0..n.min(xs.len()).min(ys.len()).min(zs.len()))
-            .map(|i| Vec3::new(xs[i] as f64, ys[i] as f64, zs[i] as f64))
-            .filter(|e| e.x.is_finite() && e.y.is_finite() && e.z.is_finite() && e.len() < 100.0)
+        let engines: Vec<(usize, Vec3)> = (0..n.min(xs.len()).min(ys.len()).min(zs.len()))
+            .map(|i| (i, Vec3::new(xs[i] as f64, ys[i] as f64, zs[i] as f64)))
+            .filter(|(_, e)| e.x.is_finite() && e.y.is_finite() && e.z.is_finite() && e.len() < 100.0)
             .collect();
         // All at the origin means the aircraft doesn't say.
-        if engines.iter().all(|e| e.len() < 0.1) {
+        if engines.iter().all(|(_, e)| e.len() < 0.1) {
             Vec::new()
         } else {
             engines
@@ -529,7 +552,7 @@ impl App {
             0 => xp::log("no engine positions reported; engine close-ups are off for this aircraft"),
             n => xp::log(&format!(
                 "{n} engine(s) at {}",
-                engines.iter().map(|e| format!("({:.1}, {:.1}, {:.1})", e.x, e.y, e.z)).collect::<Vec<_>>().join(", ")
+                engines.iter().map(|(_, e)| format!("({:.1}, {:.1}, {:.1})", e.x, e.y, e.z)).collect::<Vec<_>>().join(", ")
             )),
         }
         self.aircraft = format!(
@@ -541,7 +564,9 @@ impl App {
                 n => format!("{n} engines"),
             }
         );
-        self.director.set_engines(engines);
+        let (slots, positions): (Vec<usize>, Vec<Vec3>) = engines.into_iter().unzip();
+        self.director.set_engines(positions);
+        self.director.set_engine_slots(slots);
         let wheels = self.refs.wheels();
         match wheels.len() {
             0 => xp::log("no wheel positions reported; gear shots use a typical layout"),
