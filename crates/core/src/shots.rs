@@ -18,7 +18,18 @@ pub enum Path {
     Orbit { radius: f64, az_from: f64, az_to: f64, height_from: f64, height_to: f64 },
     /// A photographer standing still (on the ground, or a hovering ship) at a
     /// point ahead of the subject, beside its track, panning as it passes.
-    Flyby { side: f64, height: f64 },
+    /// With `on_terrain` they stand on the ground even when the subject is
+    /// flying, e.g. under the approach.
+    Flyby { side: f64, height: f64, on_terrain: bool },
+    /// A camera on a tripod beside the track, like `Flyby`, but locked off:
+    /// aimed once at the point where the subject will pass, it never pans.
+    /// The aircraft enters the frame, crosses it and leaves.
+    LockedOff { side: f64, height: f64 },
+    /// Keeps the sun right behind the subject: the camera sits on the far
+    /// side from the sun, `distance` sizes out, and swings `sweep_deg` either
+    /// side of that line so the sun slides behind the aircraft mid-take.
+    /// Only filmed when the sun is low (see the director).
+    SunBehind { distance: f64, sweep_deg: f64 },
     /// A camera fixed to the airframe at `at` (in sizes, never distance-
     /// scaled) plus `offset_m` (meters, e.g. the length of a selfie stick),
     /// aimed rigidly at the look point: it moves, pitches and banks exactly
@@ -98,6 +109,12 @@ pub struct Shot {
     pub on_ground: bool,
     /// Required height above ground, in subject sizes.
     pub min_agl: f64,
+    /// Only filmed below this height above ground, in subject sizes.
+    pub max_agl: f64,
+    /// Drone-style reveal: the take opens with the lens tilted this many
+    /// degrees down from the aircraft, at the scenery, and tilts up to find
+    /// it over the first part of the move.
+    pub reveal_tilt: f64,
     /// Required ground speed, m/s.
     pub min_speed: f64,
     /// The director may play this shot from the other side.
@@ -126,6 +143,8 @@ const BASE: Shot = Shot {
     in_air: true,
     on_ground: true,
     min_agl: 0.0,
+    max_agl: f64::INFINITY,
+    reveal_tilt: 0.0,
     min_speed: 0.0,
     mirror: true,
     weight: 1.0,
@@ -271,6 +290,39 @@ pub const CATALOG: &[Shot] = &[
         ..BASE
     },
     Shot {
+        id: "belly_cam",
+        name: "Belly cam",
+        group: Group::Special,
+        blurb: "Under the nose, looking down the runway ahead",
+        // Just under the forward fuselage (the belly is about 0.06 sizes
+        // below the reference point), looking forward and down at the
+        // centreline. Best taxiing, taking off and landing. It never goes
+        // below the ground, whatever the aircraft's real belly height.
+        path: Path::Mount { at: v(0.0, -0.06, -0.15), offset_m: v(0.0, -0.15, 0.0) },
+        look_from: v(0.0, -0.1, -1.2),
+        look_to: v(0.0, -0.08, -1.4),
+        fov_deg: Some(100.0),
+        bank_follow: 0.0,
+        mirror: false,
+        weight: 0.6,
+        ..BASE
+    },
+    Shot {
+        id: "shoulder",
+        name: "Over the shoulder",
+        group: Group::Special,
+        blurb: "Above the wing root, looking forward past the cockpit",
+        // Above the fuselage's shoulder, over the wing root, looking forward
+        // along the nose to the horizon.
+        path: Path::Mount { at: v(0.08, 0.13, 0.0), offset_m: v(0.0, 0.3, 0.0) },
+        look_from: v(0.0, 0.02, -1.4),
+        look_to: v(0.0, 0.03, -1.6),
+        fov_deg: Some(90.0),
+        bank_follow: 0.0,
+        weight: 0.6,
+        ..BASE
+    },
+    Shot {
         id: "straight_down",
         name: "Top-down",
         group: Group::Special,
@@ -307,6 +359,35 @@ pub const CATALOG: &[Shot] = &[
         look_to: v(0.0, 0.0, 0.0),
         zoom: (1.2, 1.2),
         bank_follow: 0.3,
+        ..BASE
+    },
+    Shot {
+        id: "front_orbit",
+        name: "Front orbit",
+        group: Group::CameraShip,
+        blurb: "Arc across the nose, from one side to the other",
+        // From ahead of one wing, round in front of the nose, to ahead of the other.
+        path: Path::Orbit { radius: 1.7, az_from: 300.0, az_to: 420.0, height_from: 0.2, height_to: 0.3 },
+        look_from: v(0.0, 0.0, -0.1),
+        look_to: v(0.0, 0.0, -0.1),
+        zoom: (1.2, 1.2),
+        bank_follow: 0.3,
+        weight: 0.9,
+        ..BASE
+    },
+    Shot {
+        id: "sun_silhouette",
+        name: "Sun silhouette",
+        group: Group::CameraShip,
+        blurb: "Low sun right behind the aircraft (sunrise and sunset only)",
+        // Telephoto from the far side of the sun; the sun slides behind the
+        // aircraft halfway through. Rare (low sun only), so weighted up.
+        path: Path::SunBehind { distance: 3.0, sweep_deg: 12.0 },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (2.0, 2.2),
+        bank_follow: 0.3,
+        weight: 1.5,
         ..BASE
     },
     Shot {
@@ -472,7 +553,7 @@ pub const CATALOG: &[Shot] = &[
         name: "Flyby",
         group: Group::Special,
         blurb: "Photographer by the track, aircraft passes",
-        path: Path::Flyby { side: 1.8, height: 0.15 },
+        path: Path::Flyby { side: 1.8, height: 0.15, on_terrain: false },
         look_from: v(0.0, 0.0, 0.0),
         look_to: v(0.0, 0.0, 0.0),
         zoom: (1.5, 1.3),
@@ -488,10 +569,58 @@ pub const CATALOG: &[Shot] = &[
         blurb: "Long lens from far off the track",
         // A spotter at the airport fence with a 600 mm lens: far to the side,
         // heavy compression, a slow pan as the aircraft goes by.
-        path: Path::Flyby { side: 6.0, height: 0.1 },
+        path: Path::Flyby { side: 6.0, height: 0.1, on_terrain: false },
         look_from: v(0.0, 0.0, 0.0),
         look_to: v(0.0, 0.0, 0.0),
         zoom: (4.5, 3.5),
+        bank_follow: 0.0,
+        min_speed: 25.0,
+        weight: 0.6,
+        ..BASE
+    },
+    Shot {
+        id: "under_approach",
+        name: "Under the approach",
+        group: Group::Special,
+        blurb: "Standing under the flight path as it passes overhead (low only)",
+        // On the ground almost right under the track, looking up as the
+        // aircraft roars over: on final or just after takeoff.
+        path: Path::Flyby { side: 0.3, height: 0.0, on_terrain: true },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.0, 1.0),
+        bank_follow: 0.0,
+        on_ground: false,
+        max_agl: 4.0,
+        min_speed: 25.0,
+        weight: 1.2,
+        ..BASE
+    },
+    Shot {
+        id: "drone_reveal",
+        name: "Drone reveal",
+        group: Group::Special,
+        blurb: "Starts on the scenery, tilts up to find the aircraft",
+        // A drone ahead and to the side, rising, its lens tilting up from the
+        // landscape until the aircraft comes into frame.
+        path: Path::Line { from: v(1.0, -0.1, -1.9), to: v(0.9, 0.3, -1.5) },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.0, 1.1),
+        bank_follow: 0.2,
+        reveal_tilt: 50.0,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
+        id: "locked_off",
+        name: "Locked-off frame",
+        group: Group::Special,
+        blurb: "Fixed camera, no pan: the aircraft crosses the frame",
+        path: Path::LockedOff { side: 2.2, height: 0.05 },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.0, 1.0),
         bank_follow: 0.0,
         min_speed: 25.0,
         weight: 0.6,

@@ -1,6 +1,6 @@
 # Camship
 
-A cinematic camera plugin for X-Plane 11.50+/12, written in Rust. It films your aircraft the way a camera ship and a ground crew would for a commercial. It cuts between moving outside shots: formation slides, overtakes, orbits, a dolly zoom, head-on and top-down views, wingtip, window and fin-top cameras, engine close-ups and flybys.
+A cinematic camera plugin for X-Plane 11.50+/12, written in Rust. It films your aircraft the way a camera ship and a ground crew would for a commercial. It cuts between moving outside shots: formation slides, overtakes, orbits, a dolly zoom, head-on and top-down views, wingtip, window, fin-top and belly cameras, a drone reveal, a sun silhouette, engine close-ups and flybys.
 
 ## Installing and updating
 
@@ -54,10 +54,14 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 | Top-down | air, ground | directly above, looking straight down with the aircraft centred and its nose at the top, slowly rising |
 | Overhead pass | air (high) | top-down, running nose to tail |
 | Slow orbit | air, ground | level 120° arc around the aircraft |
+| Front orbit | air, ground | level 120° arc round the front, from ahead of one wing, across the nose, to ahead of the other |
+| Sun silhouette | air, ground (sun 1° below to 25° above the horizon) | telephoto from the far side of the sun, swinging slowly so the sun slides behind the aircraft |
 | Under the wing | air (high) | looks up at the belly from below and behind |
 | Wingtip cam | air, ground | Insta360-style: an ultra-wide camera on a stick a foot or two ahead of a wingtip, looking back in at the fuselage. It's rigid, so it rolls and pitches with the aircraft |
 | Passenger window | air, ground | rigid camera just outside a cabin window aft of the wing root, looking forward and out over the wing and engine, drifting towards the tip |
 | Fin-top cam | air, ground | rigid ultra-wide camera on a short mast above the fin, looking forward along the whole fuselage, like an airliner's tail camera |
+| Belly cam | air, ground | rigid ultra-wide camera under the nose, looking forward and down at the runway |
+| Over the shoulder | air, ground | rigid camera above the wing root, looking forward along the nose to the horizon |
 | Tail detail | air, ground | tight telephoto on the fin |
 | Wing detail | air, ground | tight telephoto on the inboard wing |
 | Engine: intake | air, ground | close on one engine from ahead and low, easing in on the intake or propeller |
@@ -70,13 +74,16 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 | Breakaway | air | from formation off the wing, the camera ship drops back and down while the aircraft pulls away |
 | Flyby | air, ground (≥ 25 m/s) | fixed photographer ahead of the aircraft and beside its track (at eye height on the ground), panning as it passes |
 | Planespotter | air, ground (≥ 25 m/s) | like Flyby, but far off the track on a ~4× long lens, so the pan is slow and the background compressed |
+| Under the approach | air, low (≤ 4 sizes up, ≥ 25 m/s) | standing on the ground almost right under the flight path, looking up as the aircraft passes overhead |
+| Drone reveal | air, ground | a rising drone ahead and to the side, its lens tilting up from the scenery until it finds the aircraft |
+| Locked-off frame | air, ground (≥ 25 m/s) | a camera on a tripod beside the track that never pans: the aircraft enters the frame, crosses it and leaves |
 
 What makes it feel filmed rather than computed:
 
 - **Formation lag.** The camera ship holds its position in a frame that follows the aircraft's attitude about 1.2 s late. In a turn or pitch change the aircraft visibly rotates in the frame, and the horizon partly banks with it.
 - **Stabilized camera.** No shake or jitter: a critically damped spring gives a smooth, gimbal-steady pan. The aim leads the aircraft by how fast it moves across the view, so it stays centred on a 190°/s flyby or while the camera sweeps overhead.
 - **Eased moves and zoom creep.** Every take starts and stops its dolly gently.
-- **Safety.** The camera never goes below terrain (probed every frame) plus 2 m. It also stays at least half a wingspan from the aircraft's reference point. Belly and overhead shots are only picked when the aircraft is high enough. Shots that stop fitting, for example a belly shot on short final, are cut early.
+- **Safety.** The camera never goes below terrain (probed every frame) plus 2 m. It also stays at least half a wingspan from the aircraft's reference point. Cameras mounted on the airframe are the exception, but they still never go within 0.3 m of the ground. Under-the-wing and overhead shots are only picked when the aircraft is high enough, and Under the approach only when it is low. Shots that stop fitting, for example an under-the-wing shot on short final, are cut early.
 - **Variety.** Shots are picked at random by weight. The last three shots are never repeated.
 - **Bullet time.** Pause X-Plane and the camera keeps flying around the frozen aircraft, cutting between shots as usual. Untick *Keep filming* to freeze it with the sim instead.
 - **Golden hour.** Shots that work from either side pick one at random, but three times out of four they take the side that puts the sun behind the aircraft, so sunrises and sunsets end up in the frame. This only applies when the sun is between 6° below the horizon and 60° up; at night, or with the sun high overhead, either side is equally likely.

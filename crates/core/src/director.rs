@@ -37,6 +37,19 @@ const SUN_MIN_ELEVATION: f64 = -6.0;
 const SUN_MAX_ELEVATION: f64 = 60.0;
 /// Below this difference in how much each side faces the sun, either will do.
 const SUN_MIN_DIFFERENCE: f64 = 0.15;
+/// The sun silhouette is only filmed with the sun this low, degrees: the
+/// disc must be in the sky and low enough to sit behind the aircraft.
+const SILHOUETTE_MIN_ELEVATION: f64 = -1.0;
+const SILHOUETTE_MAX_ELEVATION: f64 = 25.0;
+/// A mounted camera never goes closer to the terrain than this, meters.
+const MOUNT_CLEARANCE_M: f64 = 0.3;
+/// How far through a take a drone reveal has tilted up onto the aircraft.
+const REVEAL_SHARE: f64 = 0.6;
+/// When the aircraft passes a fixed camera, as a share of the take.
+const FLYBY_PASS: f64 = 0.55;
+/// A locked-off frame sees the aircraft pass earlier, so it holds on the
+/// empty frame after it has gone, rather than waiting for it to arrive.
+const LOCKED_OFF_PASS: f64 = 0.4;
 /// X-Plane's default horizontal field of view, for when it can't be read.
 const DEFAULT_FOV_DEG: f64 = 60.0;
 
@@ -88,6 +101,8 @@ struct Take {
     mirror: f64,
     /// World position for shots with a fixed camera.
     anchor: Option<Vec3>,
+    /// Where the aircraft will be when it passes a fixed camera.
+    pass: Option<Vec3>,
     /// Body-frame position (meters) of the engine an engine shot films.
     engine: Option<Vec3>,
 }
@@ -113,6 +128,8 @@ pub struct Director {
     engines: Vec<Vec3>,
     /// Unit vector towards the sun, world frame, when it's worth framing.
     sun: Option<Vec3>,
+    /// The same, only while the sun is low enough for a silhouette.
+    low_sun: Option<Vec3>,
     /// The user's horizontal field of view, degrees (X-Plane's zoom 1).
     fov_deg: f64,
 }
@@ -135,6 +152,7 @@ impl Director {
             requested_take: None,
             engines: Vec::new(),
             sun: None,
+            low_sun: None,
             fov_deg: DEFAULT_FOV_DEG,
         }
     }
@@ -212,13 +230,12 @@ impl Director {
     /// then favour the side that puts the sun behind the aircraft, so sunrises
     /// and sunsets end up in the frame.
     pub fn set_sun(&mut self, heading: f64, elevation: f64) {
-        self.sun = (heading.is_finite()
-            && elevation.is_finite()
-            && (SUN_MIN_ELEVATION..=SUN_MAX_ELEVATION).contains(&elevation))
-        .then(|| {
+        let dir = (heading.is_finite() && elevation.is_finite()).then(|| {
             let (h, p) = (heading.to_radians(), elevation.to_radians());
             Vec3::new(h.sin() * p.cos(), p.sin(), -h.cos() * p.cos())
         });
+        self.sun = dir.filter(|_| (SUN_MIN_ELEVATION..=SUN_MAX_ELEVATION).contains(&elevation));
+        self.low_sun = dir.filter(|_| (SILHOUETTE_MIN_ELEVATION..=SILHOUETTE_MAX_ELEVATION).contains(&elevation));
     }
 
     fn engines_for(&self, shot: &Shot, size: f64) -> Vec<Vec3> {
@@ -284,13 +301,23 @@ impl Director {
 
         match self.shots[take.shot].path {
             // Rigid: no lag, no smoothing, no clearance push. It's bolted on.
-            Path::Mount { at, offset_m } => return self.mounted(&take, s, at * s.size + offset_m),
+            Path::Mount { at, offset_m } => return self.mounted(&take, s, at * s.size + offset_m, ground),
             Path::Overhead { .. } => return self.overhead(&take, s, frame),
+            Path::LockedOff { .. } => return self.locked_off(&take, s),
             _ => {}
         }
 
         let mut f = self.framing(&take, s, frame);
         f.pos = self.keep_clear(f.pos, s, ground);
+        let tilt = self.shots[take.shot].reveal_tilt;
+        if tilt > 0.0 {
+            // Drone reveal: aim below the aircraft, tilting up onto it.
+            let k = 1.0 - ease_in_out((self.progress(&take) / REVEAL_SHARE).min(1.0));
+            let sight = f.look - f.pos;
+            let (heading, pitch) = look_angles(sight);
+            let down = (pitch - tilt * k).max(-85.0);
+            f.look = f.pos + Attitude::new(heading, down, 0.0).rotate(Vec3::FORWARD) * sight.len();
+        }
 
         let forward = s.att.rotate(Vec3::FORWARD);
         let sight = f.look - f.pos;
@@ -326,7 +353,24 @@ impl Director {
     }
 
     fn is_fixed(&self, take: &Take) -> bool {
-        matches!(self.shots[take.shot].path, Path::Flyby { .. })
+        matches!(self.shots[take.shot].path, Path::Flyby { .. } | Path::LockedOff { .. })
+    }
+
+    /// A camera on a tripod that never pans: aimed at where the aircraft
+    /// will pass.
+    fn locked_off(&mut self, take: &Take, s: &Subject) -> CameraPose {
+        let shot = &self.shots[take.shot];
+        let pos = take.anchor.unwrap_or(s.pos);
+        let (heading, pitch) = look_angles(take.pass.unwrap_or(s.pos) - pos);
+        self.aim = Spring3::default();
+        self.sight = None;
+        CameraPose {
+            pos,
+            heading: heading.rem_euclid(360.0),
+            pitch: pitch.clamp(-89.9, 89.9),
+            roll: 0.0,
+            zoom: self.zoom(shot, ease_in_out(self.progress(take))),
+        }
     }
 
     /// Straight down from above. The aim spring can't handle a vertical
@@ -347,7 +391,13 @@ impl Director {
     }
 
     /// `at`: mount point in the body frame, meters.
-    fn mounted(&mut self, take: &Take, s: &Subject, at: Vec3) -> CameraPose {
+    fn mounted(
+        &mut self,
+        take: &Take,
+        s: &Subject,
+        at: Vec3,
+        ground: &mut dyn FnMut(Vec3) -> Option<f64>,
+    ) -> CameraPose {
         let shot = &self.shots[take.shot];
         let e = ease_in_out(self.progress(take));
         let m = take.mirror;
@@ -360,8 +410,14 @@ impl Director {
         // The next shot starts with a cut, so it re-aims from scratch.
         self.aim = Spring3::default();
         self.sight = None;
+        let mut pos = s.pos + s.att.rotate(mount);
+        // Mount points are estimates: on an aircraft with a lower belly than
+        // assumed, don't film from underground.
+        if let Some(gy) = ground(pos) {
+            pos.y = pos.y.max(gy + MOUNT_CLEARANCE_M);
+        }
         CameraPose {
-            pos: s.pos + s.att.rotate(mount),
+            pos,
             heading: world.heading.rem_euclid(360.0),
             pitch: world.pitch.clamp(-89.9, 89.9),
             roll: world.roll,
@@ -374,7 +430,9 @@ impl Director {
         // sits at -0.01 m): that's on the ground, not out of every shot.
         (if s.on_ground { shot.on_ground } else { shot.in_air })
             && s.agl.max(0.0) >= shot.min_agl * s.size
+            && s.agl <= shot.max_agl * s.size
             && s.speed() >= shot.min_speed
+            && (!matches!(shot.path, Path::SunBehind { .. }) || self.low_sun.is_some())
             && (shot.target == Target::Airframe || !self.engines_for(shot, s.size).is_empty())
     }
 
@@ -448,13 +506,17 @@ impl Director {
             }
             e
         });
-        let take = |mirror: f64, ground: &mut dyn FnMut(Vec3) -> Option<f64>| Take {
-            shot,
-            start: self.clock,
-            duration,
-            mirror,
-            anchor: self.anchor(shot, s, duration, mirror, ground),
-            engine,
+        let take = |mirror: f64, ground: &mut dyn FnMut(Vec3) -> Option<f64>| {
+            let fixed = self.anchor(shot, s, duration, mirror, ground);
+            Take {
+                shot,
+                start: self.clock,
+                duration,
+                mirror,
+                anchor: fixed.map(|f| f.0),
+                pass: fixed.map(|f| f.1),
+                engine,
+            }
         };
         if !two_sided {
             return take(side.unwrap_or(1.0), ground);
@@ -490,7 +552,8 @@ impl Director {
         total / samples.len() as f64
     }
 
-    /// World position of a fixed camera, for shots that have one.
+    /// World position of a fixed camera, for shots that have one, and where
+    /// the aircraft will be when it passes.
     fn anchor(
         &self,
         shot: usize,
@@ -498,26 +561,25 @@ impl Director {
         duration: f64,
         mirror: f64,
         ground: &mut dyn FnMut(Vec3) -> Option<f64>,
-    ) -> Option<Vec3> {
-        match self.shots[shot].path {
-            Path::Flyby { side, height } => {
-                let speed = s.speed();
-                let fwd = if speed > 1.0 { s.vel * (1.0 / speed) } else { s.att.rotate(Vec3::FORWARD) };
-                let flat = fwd.horizontal().normalized_or(Vec3::FORWARD);
-                let right = Vec3::new(-flat.z, 0.0, flat.x);
-                // The aircraft passes the photographer a little after mid-take.
-                let lead = speed * duration * 0.55;
-                let mut p = s.pos + fwd * lead + right * (side * s.size * self.settings.distance_scale * mirror);
-                if s.on_ground {
-                    let terrain = ground(p).unwrap_or(s.pos.y - s.agl);
-                    p.y = terrain + EYE_HEIGHT_M;
-                } else {
-                    p.y += height * s.size;
-                }
-                Some(p)
-            }
-            _ => None,
+    ) -> Option<(Vec3, Vec3)> {
+        let (side, height, on_terrain, share) = match self.shots[shot].path {
+            Path::Flyby { side, height, on_terrain } => (side, height, on_terrain, FLYBY_PASS),
+            Path::LockedOff { side, height } => (side, height, false, LOCKED_OFF_PASS),
+            _ => return None,
+        };
+        let speed = s.speed();
+        let fwd = if speed > 1.0 { s.vel * (1.0 / speed) } else { s.att.rotate(Vec3::FORWARD) };
+        let flat = fwd.horizontal().normalized_or(Vec3::FORWARD);
+        let right = Vec3::new(-flat.z, 0.0, flat.x);
+        let pass = s.pos + fwd * (speed * duration * share);
+        let mut p = pass + right * (side * s.size * self.settings.distance_scale * mirror);
+        if s.on_ground || on_terrain {
+            let terrain = ground(p).unwrap_or(s.pos.y - s.agl);
+            p.y = terrain + EYE_HEIGHT_M;
+        } else {
+            p.y += height * s.size;
         }
+        Some((p, pass))
     }
 
     /// The pause at the start of a take: never more than half of it, so
@@ -579,7 +641,13 @@ impl Director {
                 let off = Vec3::new(radius * az.sin(), h, -radius * az.cos()) * reach;
                 s.pos + frame.level().rotate(off)
             }
-            Path::Flyby { .. } => take.anchor.unwrap_or(s.pos),
+            Path::Flyby { .. } | Path::LockedOff { .. } => take.anchor.unwrap_or(s.pos),
+            Path::SunBehind { distance, sweep_deg } => {
+                // From the aircraft, away from the sun; swung about the vertical.
+                let away = -self.low_sun.unwrap_or(s.att.rotate(Vec3::FORWARD));
+                let swing = Attitude::new(lerp(-sweep_deg, sweep_deg, e) * m, 0.0, 0.0);
+                s.pos + swing.rotate(away) * (distance * reach)
+            }
             Path::Mount { at, offset_m } => s.pos + s.att.rotate((at * size + offset_m).mirror_x(m)),
             Path::Overhead { height_from, height_to } => s.pos + Vec3::UP * (lerp(height_from, height_to, e) * reach),
         };
@@ -659,9 +727,11 @@ mod tests {
         for seed in 0..8 {
             let mut d = Director::new(Settings::default(), seed);
             for (s, pose, id) in run(&mut d, 120.0, taxiing) {
-                assert!(pose.pos.y >= 2.0 - 1e-9, "{id} below clearance: {}", pose.pos.y);
-                // A mounted camera sits on the airframe by design.
+                // A mounted camera sits on the airframe by design, and only
+                // keeps off the ground itself.
                 let mounted = matches!(CATALOG.iter().find(|sh| sh.id == id).unwrap().path, Path::Mount { .. });
+                let floor = if mounted { MOUNT_CLEARANCE_M } else { 2.0 };
+                assert!(pose.pos.y >= floor - 1e-9, "{id} below clearance: {}", pose.pos.y);
                 assert!(mounted || (pose.pos - s.pos).len() >= 0.5 * s.size - 1e-6, "{id} inside the aircraft");
             }
         }
@@ -1089,8 +1159,12 @@ mod tests {
             let aim = Attitude::new(pose.heading, pose.pitch, 0.0).rotate(Vec3::FORWARD);
             let to_subject = (s.pos - pose.pos).normalized_or(aim);
             let off_axis = aim.dot(to_subject).clamp(-1.0, 1.0).acos().to_degrees();
-            // The passenger window looks out at the wing, not the reference point.
-            if id == "window" {
+            // Mounted cameras aim where they're bolted (out at the wing, ahead
+            // down the runway), a reveal starts off the aircraft on purpose,
+            // and a locked-off frame doesn't follow it.
+            let shot = CATALOG.iter().find(|sh| sh.id == id).unwrap();
+            let mounted = matches!(shot.path, Path::Mount { .. }) && id != "wingtip" && id != "fin_cam";
+            if mounted || id == "drone_reveal" || id == "locked_off" {
                 continue;
             }
             // Detail shots aim at a part of the airframe, so allow some margin.
@@ -1176,5 +1250,110 @@ mod tests {
         assert!(t.iter().all(|(_, p)| (p.pos - first).len() < 1e-6), "spotter moved");
         assert!(first.z.abs() > 6.0 * 1.5 * 20.0 - 1e-6, "too close to the track: {first:?}");
         assert!(t.iter().all(|(_, p)| p.zoom > 3.0 * Settings::default().zoom_scale - 1e-9));
+    }
+
+    fn aim_of(pose: &CameraPose) -> Vec3 {
+        Attitude::new(pose.heading, pose.pitch, pose.roll).rotate(Vec3::FORWARD)
+    }
+
+    fn off_axis_deg(pose: &CameraPose, target: Vec3) -> f64 {
+        aim_of(pose).dot((target - pose.pos).normalized_or(Vec3::UP)).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    #[test]
+    fn front_orbit_crosses_ahead_of_the_nose() {
+        let t = body_track("front_orbit", level);
+        let (first, last) = (t[0].0, t[t.len() - 1].0);
+        assert!(first.x * last.x < 0.0, "didn't cross from one side to the other: {first:?} -> {last:?}");
+        assert!(first.z < 0.0 && last.z < 0.0, "not ahead of the wing");
+        assert!(t.iter().any(|(b, _)| b.z < -1.5 * 1.5 * 20.0 && b.x.abs() < 5.0), "never right ahead of the nose");
+    }
+
+    #[test]
+    fn belly_cam_is_under_the_nose_looking_ahead() {
+        for (body, pose) in body_track("belly_cam", cruising) {
+            assert!(body.y < 0.0 && body.z < 0.0 && body.x.abs() < 1e-6, "{body:?}");
+            assert!(aim_of(&pose).dot(cruising(0.0).att.rotate(Vec3::FORWARD)) > 0.9, "not looking ahead");
+        }
+        // Taxiing, where this 20 m test aircraft's belly would be underground.
+        for (_, pose) in body_track("belly_cam", taxiing) {
+            assert!(pose.pos.y >= MOUNT_CLEARANCE_M - 1e-9, "underground: {}", pose.pos.y);
+        }
+    }
+
+    #[test]
+    fn shoulder_cam_is_above_looking_forward() {
+        for (body, pose) in body_track("shoulder", cruising) {
+            assert!(body.y > 0.13 * 20.0 && body.x.abs() > 1.0, "{body:?}");
+            assert!(aim_of(&pose).dot(cruising(0.0).att.rotate(Vec3::FORWARD)) > 0.9, "not looking forward");
+        }
+    }
+
+    /// On a 3° approach at 70 m/s, 60 m up.
+    fn approaching(t: f64) -> Subject {
+        let slope = 3.0_f64.to_radians();
+        let vel = Vec3::new(70.0 * slope.cos(), -70.0 * slope.sin(), 0.0);
+        let pos = Vec3::new(0.0, 60.0, 0.0) + vel * t;
+        Subject { pos, vel, att: Attitude::new(90.0, -1.0, 0.0), agl: pos.y, on_ground: false, size: 20.0 }
+    }
+
+    #[test]
+    fn under_the_approach_stands_on_the_ground_below_the_track() {
+        let t = body_track("under_approach", approaching);
+        let cam = t[0].1.pos;
+        assert!(t.iter().all(|(_, p)| (p.pos - cam).len() < 1e-6), "camera moved");
+        // Eye height, raised to the usual ground clearance.
+        assert!(cam.y >= EYE_HEIGHT_M && cam.y <= 2.0 + 1e-9, "not standing on the ground: {cam:?}");
+        assert!(cam.x > 100.0 && cam.z.abs() < 0.5 * 1.5 * 20.0, "not under the track ahead: {cam:?}");
+        // Only low: not at cruise altitude.
+        let mut d = Director::new(only("under_approach"), 1);
+        d.update(&cruising(0.0), DT, &mut flat);
+        assert_ne!(d.current_shot().unwrap().id, "under_approach");
+    }
+
+    #[test]
+    fn sun_silhouette_puts_the_low_sun_behind_the_aircraft() {
+        let s = level(0.0);
+        // No sun, or a high one: not filmed.
+        for sun in [None, Some(40.0)] {
+            let mut d = Director::new(only("sun_silhouette"), 1);
+            if let Some(elevation) = sun {
+                d.set_sun(200.0, elevation);
+            }
+            d.update(&s, DT, &mut flat);
+            assert_ne!(d.current_shot().unwrap().id, "sun_silhouette", "sun {sun:?}");
+        }
+        let mut d = Director::new(only("sun_silhouette"), 1);
+        d.set_sun(200.0, 5.0);
+        let sun = d.low_sun.unwrap();
+        for i in 0..200 {
+            let s = level(i as f64 * DT);
+            let pose = d.update(&s, DT, &mut flat);
+            assert_eq!(d.current_shot().unwrap().id, "sun_silhouette");
+            let to_aircraft = (s.pos - pose.pos).normalized_or(Vec3::UP);
+            let angle = to_aircraft.dot(sun).clamp(-1.0, 1.0).acos().to_degrees();
+            assert!(angle < 15.0, "sun {angle:.1}° off the aircraft");
+        }
+    }
+
+    #[test]
+    fn drone_reveal_tilts_up_onto_the_aircraft() {
+        let t = body_track("drone_reveal", level);
+        let at = |i: usize| off_axis_deg(&t[i].1, level(i as f64 * DT).pos);
+        assert!(at(0) > 35.0, "aircraft in frame from the start: {:.1}°", at(0));
+        assert!(at(t.len() - 1) < 5.0, "never found the aircraft: {:.1}°", at(t.len() - 1));
+        assert!(t[0].1.pitch < -20.0, "doesn't start looking down at the scenery: {}", t[0].1.pitch);
+    }
+
+    #[test]
+    fn locked_off_frame_never_moves_and_the_aircraft_crosses_it() {
+        let t = body_track("locked_off", level);
+        let p0 = t[0].1;
+        for (_, p) in &t {
+            assert!((p.pos - p0.pos).len() < 1e-9 && p.heading == p0.heading && p.pitch == p0.pitch, "camera moved");
+        }
+        let offs: Vec<f64> = (0..t.len()).map(|i| off_axis_deg(&t[i].1, level(i as f64 * DT).pos)).collect();
+        assert!(offs[0] > 30.0 && offs[offs.len() - 1] > 30.0, "aircraft not outside the frame at both ends");
+        assert!(offs.iter().any(|&o| o < 2.0), "aircraft never crosses the centre");
     }
 }
