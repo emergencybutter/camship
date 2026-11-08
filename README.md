@@ -79,7 +79,7 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 
 ### Action shots
 
-Action shots are never picked at random. When one of these things happens, Camship cuts straight to one of its shots, chosen at random among the ticked ones, and lets the moment play out before anything else interrupts it. If two happen together, the one that's over sooner wins (a touchdown beats the reversers, which beat the flaps). With **Hold** on, it stays on your shot. Untick **Action shots** in the group header to switch them all off (`action_shots 0` in `camship.prf`).
+Action shots are never picked at random. When one of these things happens, Camship cuts straight to one of its shots, chosen at random among the ticked ones, and lets the moment play out (4 s, or until just after contact for a touchdown) before a less important action takes over; that one waits its turn. A more important action cuts in after half a second, so a landing goes touchdown, spoilers, reversers. If two happen together, the one that's over sooner wins (a touchdown beats the reversers, which beat the flaps). With **Hold** on, it stays on your shot. Untick **Action shots** in the group header to switch them all off (`action_shots 0` in `camship.prf`).
 
 | Action | Detected when | Shots |
 |---|---|---|

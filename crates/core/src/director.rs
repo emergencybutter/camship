@@ -69,8 +69,12 @@ const LIGHTS_MAX_SUN: f64 = 8.0;
 /// The touchdown shot can't be cut until this long after the wheels touch, s.
 const TOUCHDOWN_HOLD_S: f64 = 1.5;
 /// An action that couldn't be filmed straight away (another action was on
-/// screen) is dropped after this long: the moment has passed, s.
-const ACTION_MAX_DELAY_S: f64 = 3.0;
+/// screen) is dropped after this long: the moment has passed. Longer than
+/// [`ACTION_MIN_S`], so one that comes just after an action cut still plays, s.
+const ACTION_MAX_DELAY_S: f64 = 4.5;
+/// A more important action can cut an action shot once it has played this
+/// long, protected or not (spoilers, then reversers a second later), s.
+const ACTION_PREEMPT_S: f64 = 0.5;
 /// A touchdown shot needs this long before the wheels touch to set up, s.
 const TOUCHDOWN_MIN_LEAD_S: f64 = 1.0;
 /// Where a main wheel sits when the aircraft doesn't say, in sizes
@@ -509,8 +513,15 @@ impl Director {
             self.notes.push(format!("{}: missed, another action was on screen", p.event.trigger.label()));
             return false;
         }
-        // Held: the user is watching this take. Another action's moment: let it play.
-        if self.hold || self.take.is_some_and(|t| t.event.is_some() && self.clock < t.protect_until) {
+        // Held: the user is watching this take. Another action's moment: let
+        // it play, unless this one matters more and it has had a glimpse.
+        let blocked = self.take.is_some_and(|t| {
+            t.event.is_some_and(|on| {
+                let outranked = p.event.trigger.priority() > on.priority() && self.clock - t.start >= ACTION_PREEMPT_S;
+                self.clock < t.protect_until && !outranked
+            })
+        });
+        if self.hold || blocked {
             return false;
         }
         self.pending = None;
@@ -1790,6 +1801,48 @@ mod tests {
             }
         }
         assert_eq!(seen[1..3], [Some(Trigger::Flaps), Some(Trigger::Gear)], "{seen:?}");
+    }
+
+    #[test]
+    fn a_more_important_action_cuts_in_after_a_glimpse() {
+        let mut d = Director::new(Settings::default(), 3);
+        d.set_engines(vec![Vec3::new(5.0, -1.0, -1.0), Vec3::new(-5.0, -1.0, -1.0)]);
+        let mut cuts = Vec::new();
+        for i in 0..(8.0 / DT) as usize {
+            let t = i as f64 * DT;
+            // Spoilers at 2 s, reversers 1 s later.
+            let speedbrake = ((t - 2.0) / 0.3).clamp(0.0, 1.0);
+            let reverser = ((t - 3.0) / 1.5).clamp(0.0, 1.0);
+            d.update(&with(Systems { speedbrake, reverser, ..Systems::default() }, taxiing(t)), DT, &mut flat);
+            let trig = shot_of(&d).trigger;
+            if cuts.last().map(|(_, c)| *c) != Some(trig) {
+                cuts.push((t, trig));
+            }
+        }
+        let at = |want| cuts.iter().find(|(_, c)| *c == Some(want)).map(|(t, _)| *t);
+        let spoilers = at(Trigger::Spoilers).expect("no spoiler shot");
+        let reversers = at(Trigger::Reverser).expect("no reverser shot");
+        assert!(reversers - spoilers >= ACTION_PREEMPT_S && reversers < 3.5, "{cuts:?}");
+    }
+
+    #[test]
+    fn a_less_important_action_waits_for_the_protected_one() {
+        let mut d = Director::new(Settings::default(), 5);
+        let mut cuts = Vec::new();
+        for i in 0..(12.0 / DT) as usize {
+            let t = i as f64 * DT;
+            // Gear at 2 s, flaps 1 s later: flaps wait for the gear's moment.
+            let gear = 1.0 - ((t - 2.0) / 6.0).clamp(0.0, 1.0);
+            let flaps = ((t - 3.0) / 4.0).clamp(0.0, 0.5);
+            d.update(&with(Systems { gear, flaps, ..Systems::default() }, cruising(t)), DT, &mut flat);
+            let trig = shot_of(&d).trigger;
+            if cuts.last().map(|(_, c)| *c) != Some(trig) {
+                cuts.push((t, trig));
+            }
+        }
+        let gear = cuts.iter().find(|(_, c)| *c == Some(Trigger::Gear)).expect("no gear shot").0;
+        let flaps = cuts.iter().find(|(_, c)| *c == Some(Trigger::Flaps)).expect("flaps never filmed").0;
+        assert!(flaps - gear >= ACTION_MIN_S - DT, "{cuts:?}");
     }
 
     #[test]
