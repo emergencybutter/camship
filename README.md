@@ -1,6 +1,6 @@
 # Camship
 
-A cinematic camera plugin for X-Plane 11.50+/12, written in Rust. It films your aircraft the way a camera ship and a ground crew would for a commercial. It cuts between moving outside shots: formation slides, overtakes, orbits, head-on and top-down views, a wingtip camera, engine close-ups and flybys.
+A cinematic camera plugin for X-Plane 11.50+/12, written in Rust. It films your aircraft the way a camera ship and a ground crew would for a commercial. It cuts between moving outside shots: formation slides, overtakes, orbits, a dolly zoom, head-on and top-down views, wingtip, window and fin-top cameras, engine close-ups and flybys.
 
 ## Installing and updating
 
@@ -56,6 +56,8 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 | Slow orbit | air, ground | level 120° arc around the aircraft |
 | Under the wing | air (high) | looks up at the belly from below and behind |
 | Wingtip cam | air, ground | Insta360-style: an ultra-wide camera on a stick a foot or two ahead of a wingtip, looking back in at the fuselage. It's rigid, so it rolls and pitches with the aircraft |
+| Passenger window | air, ground | rigid camera just outside a cabin window aft of the wing root, looking forward and out over the wing and engine, drifting towards the tip |
+| Fin-top cam | air, ground | rigid ultra-wide camera on a short mast above the fin, looking forward along the whole fuselage, like an airliner's tail camera |
 | Tail detail | air, ground | tight telephoto on the fin |
 | Wing detail | air, ground | tight telephoto on the inboard wing |
 | Engine: intake | air, ground | close on one engine from ahead and low, easing in on the intake or propeller |
@@ -64,7 +66,10 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 | Engine: from below | air | looking up at the nacelle |
 | Long-lens chase | air, ground | far behind, ~4.5× zoom, compressed perspective |
 | Crane up from behind | air, ground | rises from tail height to a high rear view |
+| Dolly zoom | air, ground | backs away to three times the distance while zooming in to match: the aircraft stays the same size and the background swells behind it |
+| Breakaway | air | from formation off the wing, the camera ship drops back and down while the aircraft pulls away |
 | Flyby | air, ground (≥ 25 m/s) | fixed photographer ahead of the aircraft and beside its track (at eye height on the ground), panning as it passes |
+| Planespotter | air, ground (≥ 25 m/s) | like Flyby, but far off the track on a ~4× long lens, so the pan is slow and the background compressed |
 
 What makes it feel filmed rather than computed:
 

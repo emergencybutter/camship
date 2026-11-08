@@ -1089,8 +1089,92 @@ mod tests {
             let aim = Attitude::new(pose.heading, pose.pitch, 0.0).rotate(Vec3::FORWARD);
             let to_subject = (s.pos - pose.pos).normalized_or(aim);
             let off_axis = aim.dot(to_subject).clamp(-1.0, 1.0).acos().to_degrees();
+            // The passenger window looks out at the wing, not the reference point.
+            if id == "window" {
+                continue;
+            }
             // Detail shots aim at a part of the airframe, so allow some margin.
             assert!(off_axis < 25.0, "{id}: aircraft {off_axis:.1}° off-axis");
         }
+    }
+
+    /// Plays only `id` for a whole take, returning the camera's offset from
+    /// the aircraft in the body frame and the pose, per frame.
+    fn body_track(id: &str, subject: fn(f64) -> Subject) -> Vec<(Vec3, CameraPose)> {
+        let settings = Settings { shot_min_s: 8.0, shot_max_s: 8.0, pause_s: 0.0, ..only(id) };
+        let mut d = Director::new(settings, 5);
+        (0..(7.9 / DT) as usize)
+            .map(|i| {
+                let s = subject(i as f64 * DT);
+                let pose = d.update(&s, DT, &mut flat);
+                assert_eq!(d.current_shot().unwrap().id, id);
+                let b = s.att;
+                let v = pose.pos - s.pos;
+                let body = Vec3::new(
+                    v.dot(b.rotate(Vec3::new(1.0, 0.0, 0.0))),
+                    v.dot(b.rotate(Vec3::UP)),
+                    v.dot(b.rotate(Vec3::new(0.0, 0.0, 1.0))),
+                );
+                (body, pose)
+            })
+            .collect()
+    }
+
+    fn level(t: f64) -> Subject {
+        Subject { att: Attitude::new(90.0, 0.0, 0.0), ..cruising(t) }
+    }
+
+    #[test]
+    fn dolly_zoom_keeps_the_aircraft_the_same_size() {
+        let t = body_track("dolly_zoom", level);
+        let (first, last) = (t[0], t[t.len() - 1]);
+        assert!(last.0.len() > 2.5 * first.0.len(), "didn't back away: {:?} -> {:?}", first.0, last.0);
+        // Apparent size ~ zoom / distance.
+        for (body, pose) in &t {
+            let ratio = pose.zoom / body.len();
+            let start = first.1.zoom / first.0.len();
+            assert!((ratio / start - 1.0).abs() < 0.05, "size drifted: {ratio} vs {start}");
+        }
+    }
+
+    #[test]
+    fn breakaway_drops_back_and_down() {
+        let t = body_track("breakaway", level);
+        let (first, last) = (t[0].0, t[t.len() - 1].0);
+        assert!(last.z > first.z + 2.0 * 20.0, "didn't fall back: {first:?} -> {last:?}");
+        assert!(last.y < first.y, "didn't descend: {first:?} -> {last:?}");
+    }
+
+    #[test]
+    fn window_cam_sits_on_the_fuselage_looking_out() {
+        for subject in [cruising as fn(f64) -> Subject, taxiing] {
+            for (body, pose) in body_track("window", subject) {
+                // Beside the fuselage, not out on the wing.
+                assert!(body.x.abs() > 1.1 && body.x.abs() < 2.0, "{body:?}");
+                let s = subject(0.0);
+                let fwd = Attitude::new(pose.heading, pose.pitch, pose.roll).rotate(Vec3::FORWARD);
+                let out = s.att.rotate(Vec3::new(body.x.signum(), 0.0, 0.0));
+                assert!(fwd.dot(out) > 0.5, "not looking outboard");
+            }
+        }
+    }
+
+    #[test]
+    fn fin_cam_is_above_the_tail_looking_forward() {
+        for (body, pose) in body_track("fin_cam", cruising) {
+            assert!(body.x.abs() < 1e-6 && body.y > 0.22 * 20.0 && body.z > 0.3 * 20.0, "{body:?}");
+            let s = cruising(0.0);
+            let fwd = Attitude::new(pose.heading, pose.pitch, pose.roll).rotate(Vec3::FORWARD);
+            assert!(fwd.dot(s.att.rotate(Vec3::FORWARD)) > 0.9, "not looking forward");
+        }
+    }
+
+    #[test]
+    fn planespotter_is_far_off_the_track_on_a_long_lens() {
+        let t = body_track("planespotter", level);
+        let first = t[0].1.pos;
+        assert!(t.iter().all(|(_, p)| (p.pos - first).len() < 1e-6), "spotter moved");
+        assert!(first.z.abs() > 6.0 * 1.5 * 20.0 - 1e-6, "too close to the track: {first:?}");
+        assert!(t.iter().all(|(_, p)| p.zoom > 3.0 * Settings::default().zoom_scale - 1e-9));
     }
 }

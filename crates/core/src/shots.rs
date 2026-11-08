@@ -236,6 +236,41 @@ pub const CATALOG: &[Shot] = &[
         ..BASE
     },
     Shot {
+        id: "window",
+        name: "Passenger window",
+        group: Group::Special,
+        blurb: "From a cabin window, out over the wing",
+        // Just outside the fuselage skin (about 0.055 sizes from the
+        // centreline on most types, plus a hand's width) a little aft of the
+        // wing root, looking forward and out over the wing and engine, as a
+        // passenger would. Drifts slowly out towards the tip.
+        path: Path::Mount { at: v(0.055, 0.03, 0.12), offset_m: v(0.3, 0.0, 0.0) },
+        look_from: v(0.26, -0.03, -0.06),
+        look_to: v(0.32, -0.02, -0.02),
+        fov_deg: Some(80.0),
+        bank_follow: 0.0,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
+        id: "fin_cam",
+        name: "Fin-top cam",
+        group: Group::Special,
+        blurb: "On a mast above the fin, looking forward",
+        // Like an airliner's tail camera: above the top of the fin, looking
+        // forward along the whole fuselage to the horizon. The fin top is
+        // 0.13 (light aircraft) to 0.22 (airliners) sizes up, so the mast
+        // clears it on every type. Tilts slowly up from the nose.
+        path: Path::Mount { at: v(0.0, 0.22, 0.4), offset_m: v(0.0, 0.4, 0.0) },
+        look_from: v(0.0, 0.0, -0.55),
+        look_to: v(0.0, 0.04, -0.7),
+        fov_deg: Some(100.0),
+        bank_follow: 0.0,
+        mirror: false,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
         id: "straight_down",
         name: "Top-down",
         group: Group::Special,
@@ -400,6 +435,39 @@ pub const CATALOG: &[Shot] = &[
         ..BASE
     },
     Shot {
+        id: "dolly_zoom",
+        name: "Dolly zoom",
+        group: Group::CameraShip,
+        blurb: "Backs away while zooming in: the background swells",
+        // The Vertigo effect: the camera triples its distance along one line
+        // through the aim point while the zoom triples, so the aircraft stays
+        // the same size and the scenery behind it grows.
+        path: Path::Line { from: v(0.75, 0.06, -0.45), to: v(2.25, 0.18, -1.35) },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (1.0, 3.0),
+        weight: 0.8,
+        ..BASE
+    },
+    Shot {
+        id: "breakaway",
+        name: "Breakaway",
+        group: Group::CameraShip,
+        blurb: "Camera plane drops back and away",
+        // How an air-to-air sortie ends: from formation off the wing, the
+        // camera ship eases off its power and descends away, and the aircraft
+        // pulls ahead and shrinks in the frame.
+        path: Path::Line { from: v(1.3, 0.05, 0.1), to: v(2.6, -0.35, 3.2) },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, -0.1),
+        zoom: (1.4, 1.5),
+        bank_follow: 0.7,
+        on_ground: false,
+        min_agl: 0.6,
+        weight: 0.7,
+        ..BASE
+    },
+    Shot {
         id: "flyby",
         name: "Flyby",
         group: Group::Special,
@@ -411,6 +479,22 @@ pub const CATALOG: &[Shot] = &[
         bank_follow: 0.0,
         min_speed: 25.0,
         weight: 0.8,
+        ..BASE
+    },
+    Shot {
+        id: "planespotter",
+        name: "Planespotter",
+        group: Group::Special,
+        blurb: "Long lens from far off the track",
+        // A spotter at the airport fence with a 600 mm lens: far to the side,
+        // heavy compression, a slow pan as the aircraft goes by.
+        path: Path::Flyby { side: 6.0, height: 0.1 },
+        look_from: v(0.0, 0.0, 0.0),
+        look_to: v(0.0, 0.0, 0.0),
+        zoom: (4.5, 3.5),
+        bank_follow: 0.0,
+        min_speed: 25.0,
+        weight: 0.6,
         ..BASE
     },
 ];
