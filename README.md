@@ -1,6 +1,6 @@
 # Camship
 
-A cinematic camera plugin for X-Plane 11.50+/12, written in Rust. It films your aircraft the way a camera ship and a ground crew would for a commercial. It cuts between moving outside shots: formation slides, overtakes, orbits, a dolly zoom, head-on and top-down views, wingtip, window, fin-top and belly cameras, a drone reveal, a sun silhouette, engine close-ups and flybys.
+A cinematic camera plugin for X-Plane 11.50+/12, written in Rust. It films your aircraft the way a camera ship and a ground crew would for a commercial. It cuts between moving outside shots: formation slides, overtakes, orbits, a dolly zoom, head-on and top-down views, wingtip, fin-top and belly cameras, a drone reveal, a sun silhouette, engine close-ups and flybys.
 
 ## Installing and updating
 
@@ -58,7 +58,6 @@ All distances scale with the aircraft's size, so the same shot frames a Cessna a
 | Sun silhouette | air, ground (sun 1° below to 25° above the horizon) | telephoto from the far side of the sun, swinging slowly so the sun slides behind the aircraft |
 | Under the wing | air (high) | looks up at the belly from below and behind |
 | Wingtip cam | air, ground | Insta360-style: an ultra-wide camera on a stick a foot or two ahead of a wingtip, looking back in at the fuselage. It's rigid, so it rolls and pitches with the aircraft |
-| Passenger window | air, ground | rigid camera just outside a cabin window aft of the wing root, looking forward and out over the wing and engine, drifting towards the tip |
 | Fin-top cam | air, ground | rigid ultra-wide camera on a short mast above the fin, looking forward along the whole fuselage, like an airliner's tail camera |
 | Belly cam | air, ground | rigid ultra-wide camera under the nose, looking forward and down at the runway |
 | Over the shoulder | air, ground | rigid camera above the wing root, looking forward along the nose to the horizon |

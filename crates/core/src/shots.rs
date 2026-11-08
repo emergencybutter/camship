@@ -255,23 +255,6 @@ pub const CATALOG: &[Shot] = &[
         ..BASE
     },
     Shot {
-        id: "window",
-        name: "Passenger window",
-        group: Group::Special,
-        blurb: "From a cabin window, out over the wing",
-        // Just outside the fuselage skin (about 0.055 sizes from the
-        // centreline on most types, plus a hand's width) a little aft of the
-        // wing root, looking forward and out over the wing and engine, as a
-        // passenger would. Drifts slowly out towards the tip.
-        path: Path::Mount { at: v(0.055, 0.03, 0.12), offset_m: v(0.3, 0.0, 0.0) },
-        look_from: v(0.26, -0.03, -0.06),
-        look_to: v(0.32, -0.02, -0.02),
-        fov_deg: Some(80.0),
-        bank_follow: 0.0,
-        weight: 0.7,
-        ..BASE
-    },
-    Shot {
         id: "fin_cam",
         name: "Fin-top cam",
         group: Group::Special,

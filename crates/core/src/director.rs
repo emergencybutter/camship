@@ -1159,7 +1159,7 @@ mod tests {
             let aim = Attitude::new(pose.heading, pose.pitch, 0.0).rotate(Vec3::FORWARD);
             let to_subject = (s.pos - pose.pos).normalized_or(aim);
             let off_axis = aim.dot(to_subject).clamp(-1.0, 1.0).acos().to_degrees();
-            // Mounted cameras aim where they're bolted (out at the wing, ahead
+            // Mounted cameras aim where they're bolted (ahead and over the nose,
             // down the runway), a reveal starts off the aircraft on purpose,
             // and a locked-off frame doesn't follow it.
             let shot = CATALOG.iter().find(|sh| sh.id == id).unwrap();
@@ -1217,20 +1217,6 @@ mod tests {
         let (first, last) = (t[0].0, t[t.len() - 1].0);
         assert!(last.z > first.z + 2.0 * 20.0, "didn't fall back: {first:?} -> {last:?}");
         assert!(last.y < first.y, "didn't descend: {first:?} -> {last:?}");
-    }
-
-    #[test]
-    fn window_cam_sits_on_the_fuselage_looking_out() {
-        for subject in [cruising as fn(f64) -> Subject, taxiing] {
-            for (body, pose) in body_track("window", subject) {
-                // Beside the fuselage, not out on the wing.
-                assert!(body.x.abs() > 1.1 && body.x.abs() < 2.0, "{body:?}");
-                let s = subject(0.0);
-                let fwd = Attitude::new(pose.heading, pose.pitch, pose.roll).rotate(Vec3::FORWARD);
-                let out = s.att.rotate(Vec3::new(body.x.signum(), 0.0, 0.0));
-                assert!(fwd.dot(out) > 0.5, "not looking outboard");
-            }
-        }
     }
 
     #[test]
