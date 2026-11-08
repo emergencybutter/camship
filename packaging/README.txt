@@ -4,7 +4,9 @@ CAMSHIP
 An X-Plane 11.50+ / 12 plugin that films your aircraft like a camera plane
 shooting an ad. It cuts between moving outside shots: formation slides,
 overtakes, orbits, head-on and top-down views, a wingtip camera, engine
-close-ups and flybys.
+close-ups and flybys. When something happens (gear, flaps, touchdown,
+reversers, rotation, spoilers, engine start and more) it cuts to a shot
+made for that moment.
 
 Works on Windows, macOS (Intel and Apple Silicon) and Linux.
 
