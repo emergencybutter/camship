@@ -72,6 +72,8 @@ const TOUCHDOWN_HOLD_S: f64 = 1.5;
 /// screen) is dropped after this long: the moment has passed. Longer than
 /// [`ACTION_MIN_S`], so one that comes just after an action cut still plays, s.
 const ACTION_MAX_DELAY_S: f64 = 4.5;
+/// Height of the belly above the ground, in sizes: about 0.8 m on a bizjet.
+const BELLY_CLEARANCE: f64 = 0.06;
 /// A more important action can cut an action shot once it has played this
 /// long, protected or not (spoilers, then reversers a second later), s.
 const ACTION_PREEMPT_S: f64 = 0.5;
@@ -285,6 +287,16 @@ impl Director {
         let centre = if lowest.is_finite() && lowest < 0.0 { -lowest } else { -GUESS_MAIN_GEAR.y * size };
         // The wheel centre plus about a wheel radius.
         centre + 0.5 * wheel_size(size)
+    }
+
+    /// Where the belly is (body-frame y, meters), from the wheels: the
+    /// ground under them plus a typical belly clearance. None without wheels.
+    fn belly_height(&self, size: f64) -> Option<f64> {
+        if self.gear.is_empty() {
+            return None;
+        }
+        let clearance = (BELLY_CLEARANCE * size).clamp(0.3, 3.0);
+        Some(-self.rest_height(size) + clearance)
     }
 
     /// Engine positions (body frame, meters; +x right, +y up, +z aft).
@@ -625,7 +637,15 @@ impl Director {
         let e = ease_in_out(self.progress(take));
         let m = take.mirror;
         let (origin, unit) = self.origin(take, s.size);
-        let mount = origin + (at * unit + offset_m).mirror_x(m);
+        let mut mount = origin + (at * unit + offset_m).mirror_x(m);
+        // Under the fuselage: how far the belly sits below the reference
+        // point varies a lot (0.9 m guessed, 1.6 m real on a Falcon 8X), so
+        // go by the wheels when the aircraft gives them.
+        if at.x == 0.0 && at.y < 0.0 && take.part.is_none() {
+            if let Some(belly) = self.belly_height(s.size) {
+                mount.y = mount.y.min(belly + offset_m.y);
+            }
+        }
         let look = origin + (shot.look_from.lerp(shot.look_to, e) * unit).mirror_x(m);
         // Aim in the body frame, then carry it through the aircraft's attitude.
         let (heading, pitch) = look_angles(look - mount);
@@ -1506,6 +1526,18 @@ mod tests {
         for (_, pose) in body_track("belly_cam", taxiing) {
             assert!(pose.pos.y >= MOUNT_CLEARANCE_M - 1e-9, "underground: {}", pose.pos.y);
         }
+    }
+
+    #[test]
+    fn belly_cam_goes_by_the_wheels() {
+        // The Falcon 8X: reference point well above the cabin floor.
+        let mut d = Director::new(only("belly_cam"), 1);
+        d.set_gear(vec![Vec3::new(0.0, -2.0, -9.7), Vec3::new(-2.1, -2.0, 0.3), Vec3::new(2.1, -2.0, 0.3)]);
+        let mut s = cruising(0.0);
+        s.size = 13.2;
+        let pose = d.update(&s, DT, &mut flat);
+        let y = (pose.pos - s.pos).dot(s.att.rotate(Vec3::UP));
+        assert!(y < -1.5 && y > -2.2, "belly cam at {y:.2} m");
     }
 
     #[test]
