@@ -83,7 +83,7 @@ Action shots are never picked at random. When one of these things happens, Camsh
 
 | Action | Detected when | Shots |
 |---|---|---|
-| Gear | the gear starts to extend or retract (`sim/flightmodel2/gear/deploy_ratio`) | *from below* (under the wing, looking up at a main gear), *nose gear* (ahead and below it), *wheel-well cam* (rigid, under the wing, looking back into the bay) |
+| Gear | the gear starts to extend or retract (`sim/flightmodel2/gear/deploy_ratio`) | *from below* (right below a main gear, looking up into the bay), *nose gear* (ahead and below it), *wheel-well cam* (rigid, under the wing, looking back into the bay) |
 | Flaps | the flaps start to move, at each stage (`flap1_deploy_ratio`) | *window seat* (a passenger's view of the inboard flap), *trailing edge* (from behind and above the wing) |
 | Touchdown | the wheels are about 2.5 s from the runway at the current sink rate (predicted, so the camera is in place before they touch) | *runway edge* (a photographer by the runway at the touchdown point, tight on the main gear), *gear cam* (rigid, beside the main wheels), *low chase* (low behind the main gear) |
 | Reversers | a thrust reverser opens (`thrust_reverser_deploy_ratio`) | *nacelle* (outboard of the engine), *from behind* (low behind the engine, looking into the open reverser) |

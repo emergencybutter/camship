@@ -634,13 +634,14 @@ pub const CATALOG: &[Shot] = &[
         id: "gear_below",
         name: "Gear: from below",
         group: Group::Action,
-        blurb: "Gear moving: under the wing, looking up at the main gear",
-        // Below, outboard and ahead of a main wheel, drifting aft as the
-        // gear swings down out of (or up into) its bay.
-        path: Path::Line { from: v(2.6, -3.4, -2.8), to: v(2.9, -2.9, 0.4) },
+        blurb: "Gear moving: right below the main gear, looking up into the bay",
+        // Below, a little inboard of and ahead of a main wheel, drifting aft
+        // as the gear swings down out of (or up into) its bay. Not outboard:
+        // gear folds inboard, and from out there the wing hides it.
+        path: Path::Line { from: v(-0.6, -4.5, -3.0), to: v(-0.3, -4.0, -1.0) },
         target: Target::Gear { nose: false },
-        look_from: v(0.0, 0.6, 0.0),
-        look_to: v(0.0, 0.4, 0.1),
+        look_from: v(0.0, 0.5, 0.0),
+        look_to: v(0.0, 0.3, 0.1),
         zoom: (1.2, 1.3),
         dutch: 3.0,
         on_ground: false,

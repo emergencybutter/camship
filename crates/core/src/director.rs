@@ -28,6 +28,8 @@ const LEAD_TAU: f64 = 0.15;
 const RECENT: usize = 3;
 /// The camera never gets closer to the subject's reference point than this, in sizes.
 const MIN_RANGE: f64 = 0.5;
+/// The same for shots of an engine or wheel, from it, in its own size.
+const PART_MIN_RANGE: f64 = 1.5;
 /// Eye height of a photographer standing beside the runway, meters.
 const EYE_HEIGHT_M: f64 = 1.7;
 /// How often a two-sided shot is filmed from the side that faces the sun.
@@ -442,7 +444,7 @@ impl Director {
         }
 
         let mut f = self.framing(&take, s, frame);
-        f.pos = self.keep_clear(f.pos, s, ground);
+        f.pos = self.keep_clear(f.pos, &take, s, ground);
         let tilt = self.shots[take.shot].reveal_tilt;
         if tilt > 0.0 {
             // Drone reveal: aim below the aircraft, tilting up onto it.
@@ -926,11 +928,20 @@ impl Director {
         }
     }
 
-    fn keep_clear(&self, mut pos: Vec3, s: &Subject, ground: &mut dyn FnMut(Vec3) -> Option<f64>) -> Vec3 {
-        let min_range = MIN_RANGE * s.size;
-        let d = pos - s.pos;
+    fn keep_clear(&self, mut pos: Vec3, take: &Take, s: &Subject, ground: &mut dyn FnMut(Vec3) -> Option<f64>) -> Vec3 {
+        // A shot built around an engine or wheel keeps its distance from
+        // that, not from the middle of the aircraft: pushing a gear shot out
+        // from the middle puts it back under the wing.
+        let (centre, min_range) = match take.part {
+            Some(_) => {
+                let (origin, unit) = self.origin(take, s.size);
+                (s.pos + s.att.rotate(origin), PART_MIN_RANGE * unit)
+            }
+            None => (s.pos, MIN_RANGE * s.size),
+        };
+        let d = pos - centre;
         if d.len() < min_range {
-            pos = s.pos + d.normalized_or(Vec3::UP) * min_range;
+            pos = centre + d.normalized_or(Vec3::UP) * min_range;
         }
         if let Some(gy) = ground(pos) {
             let floor = gy + self.settings.ground_clearance_m;
@@ -1562,6 +1573,25 @@ mod tests {
         let pose = d.update(&s, DT, &mut flat);
         let y = (pose.pos - s.pos).dot(s.att.rotate(Vec3::UP));
         assert!(y < -1.5 && y > -2.2, "belly cam at {y:.2} m");
+    }
+
+    #[test]
+    fn gear_from_below_is_under_the_wheel_not_out_under_the_wing() {
+        let mut d = Director::new(Settings::default(), 5);
+        let i = CATALOG.iter().position(|sh| sh.id == "gear_below").unwrap();
+        // Wings level: the camera flies alongside rather than bolted on, so a
+        // bank would swing it sideways.
+        let s = Subject { att: Attitude::new(90.0, 2.0, 0.0), ..cruising(0.0) };
+        let wheel = GUESS_MAIN_GEAR * s.size;
+        d.play(i);
+        for _ in 0..(5.0 / DT) as usize {
+            let pose = d.update(&s, DT, &mut flat);
+            assert_eq!(shot_of(&d).id, "gear_below");
+            let v = pose.pos - s.pos;
+            let (x, y) = (v.dot(s.att.rotate(Vec3::new(1.0, 0.0, 0.0))), v.dot(s.att.rotate(Vec3::UP)));
+            assert!(x.abs() <= wheel.x, "outboard of the wheel, under the wing: x {x:.1}");
+            assert!(y < wheel.y - 1.0, "not below the wheel: y {y:.1}");
+        }
     }
 
     #[test]
