@@ -684,7 +684,11 @@ impl Director {
         // A fixed camera stays put whatever the aircraft does, until the take
         // ends; an action shot follows its action through (a touchdown goes
         // from the air to the ground).
-        self.is_fixed(take) || take.event.is_some() || self.fits(&self.shots[take.shot], s)
+        // The user's pick plays out too.
+        self.is_fixed(take)
+            || take.event.is_some()
+            || self.requested_take == Some(take.start)
+            || self.fits(&self.shots[take.shot], s)
     }
 
     /// Whether the director may pick this shot at random (action shots it never does).
@@ -701,8 +705,11 @@ impl Director {
     }
 
     fn pick(&mut self, s: &Subject) -> usize {
+        // Asked for by name: play it whatever the aircraft is doing (an
+        // in-air shot on the ground, a touchdown shot in cruise), as long as
+        // this aircraft has what it films.
         if let Some(i) = self.requested.take() {
-            if self.fits(&self.shots[i], s) {
+            if self.supported(i, s.size) {
                 return i;
             }
         }
@@ -1310,6 +1317,23 @@ mod tests {
         for _ in 0..30 {
             d.update(&s, DT, &mut flat);
             assert_eq!(d.current_shot().unwrap().id, "orbit");
+        }
+    }
+
+    #[test]
+    fn play_films_the_shot_asked_for_even_when_it_does_not_fit() {
+        // Under the wing is an in-air shot; ask for it parked, with Hold on.
+        let mut d = Director::new(Settings::default(), 23);
+        let s = taxiing(0.0);
+        d.update(&s, DT, &mut flat);
+        d.set_hold(true);
+        let i = CATALOG.iter().position(|sh| sh.id == "belly").unwrap();
+        assert!(!CATALOG[i].on_ground);
+        d.play(i);
+        for _ in 0..300 {
+            let pose = d.update(&s, DT, &mut flat);
+            assert_eq!(d.current_shot().unwrap().id, "belly");
+            assert!(pose.pos.y >= MOUNT_CLEARANCE_M - 1e-9, "underground: {}", pose.pos.y);
         }
     }
 
