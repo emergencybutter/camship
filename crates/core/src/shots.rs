@@ -765,18 +765,17 @@ pub const CATALOG: &[Shot] = &[
         ..BASE
     },
     Shot {
-        id: "reverser_window",
-        name: "Reverser: cabin window",
+        id: "reverser_behind",
+        name: "Reverser: from behind",
         group: Group::Action,
-        blurb: "Reversers opening: from the fuselage, looking out at the engine",
-        // Inboard of and ahead of the engine, by the fuselage, looking out
-        // and back at the nacelle as the reverser opens.
-        path: Path::Mount { at: v(-1.4, 0.6, -1.2), offset_m: Vec3::ZERO },
-        target: Target::Engine { outboard_only: true },
-        look_from: v(0.0, 0.0, 0.5),
-        look_to: v(0.0, 0.0, 0.6),
-        fov_deg: Some(70.0),
-        bank_follow: 0.0,
+        blurb: "Reversers opening: low behind the engine, looking forward into the open reverser",
+        // Behind and outboard, closing in. Works for engines under the wing
+        // and on the rear fuselage alike.
+        path: Path::Line { from: v(2.2, -0.4, 4.0), to: v(1.8, -0.3, 3.0) },
+        target: Target::Engine { outboard_only: false },
+        look_from: v(0.0, 0.0, 0.6),
+        look_to: v(0.0, 0.0, 0.5),
+        zoom: (1.3, 1.4),
         trigger: Some(Trigger::Reverser),
         ..BASE
     },
@@ -888,16 +887,17 @@ pub const CATALOG: &[Shot] = &[
         ..BASE
     },
     Shot {
-        id: "start_window",
-        name: "Engine start: cabin window",
+        id: "start_exhaust",
+        name: "Engine start: exhaust",
         group: Group::Action,
-        blurb: "Engine start: from the fuselage, looking out at the engine that lit",
-        path: Path::Mount { at: v(-1.4, 0.6, -1.2), offset_m: Vec3::ZERO },
-        target: Target::Engine { outboard_only: true },
-        look_from: v(0.0, 0.0, -0.2),
-        look_to: v(0.0, 0.0, -0.1),
-        fov_deg: Some(70.0),
-        bank_follow: 0.0,
+        blurb: "Engine start: behind the engine that lit, the exhaust coming to life",
+        // Behind and outboard of the tailpipe, drifting in and across.
+        path: Path::Line { from: v(2.4, 0.2, 3.4), to: v(1.6, 0.1, 2.8) },
+        target: Target::Engine { outboard_only: false },
+        look_from: v(0.0, 0.0, 0.7),
+        look_to: v(0.0, 0.0, 0.5),
+        zoom: (1.3, 1.4),
+        dutch: -2.0,
         trigger: Some(Trigger::EngineStart),
         ..BASE
     },

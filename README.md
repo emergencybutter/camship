@@ -86,13 +86,13 @@ Action shots are never picked at random. When one of these things happens, Camsh
 | Gear | the gear starts to extend or retract (`sim/flightmodel2/gear/deploy_ratio`) | *from below* (under the wing, looking up at a main gear), *nose gear* (ahead and below it), *wheel-well cam* (rigid, under the wing, looking back into the bay) |
 | Flaps | the flaps start to move, at each stage (`flap1_deploy_ratio`) | *window seat* (a passenger's view of the inboard flap), *trailing edge* (from behind and above the wing) |
 | Touchdown | the wheels are about 2.5 s from the runway at the current sink rate (predicted, so the camera is in place before they touch) | *runway edge* (a photographer by the runway at the touchdown point, tight on the main gear), *gear cam* (rigid, beside the main wheels), *low chase* (low behind the main gear) |
-| Reversers | a thrust reverser opens (`thrust_reverser_deploy_ratio`) | *nacelle* (outboard of the engine), *cabin window* (from the fuselage, looking out at the engine) |
+| Reversers | a thrust reverser opens (`thrust_reverser_deploy_ratio`) | *nacelle* (outboard of the engine), *from behind* (low behind the engine, looking into the open reverser) |
 | Takeoff roll | accelerating harder than 1.2 m/s² past 12 m/s on the ground, after being nearly stopped | *runway edge* (long lens from the edge ahead, the aircraft charging past), *from behind* (low, far behind, long lens) |
 | Rotation | on the ground above 20 m/s, still accelerating, the nose coming up faster than 1.5°/s (also on a touch-and-go) | *runway edge* (the aircraft lifts off as it passes), *gear cam* (the wheels leaving the runway), *chase* (low behind as it pulls up) |
 | Ground spoilers | the spoilers go past half on the ground (`speedbrake_ratio`) | *window seat* (looking out over the wing), *above the wing* |
 | Go-around | climbing faster than 2.5 m/s for a second, low, within 20 s of descending close to the ground | *climb-out* (long lens from behind), *under the climb* (standing under the flight path) |
 | Steep turn | banked past 45° for a second | *high outside* (above the high wing, horizon level), *down the low wing* (rigid on the fin, looking down the low wing at the ground) |
-| Engine start | an engine starts burning fuel (`engine_is_burning_fuel`) | *intake* and *cabin window*, both on the engine that started |
+| Engine start | an engine starts burning fuel (`engine_is_burning_fuel`) | *intake* and *exhaust*, both on the engine that started |
 | Landing lights | the landing lights come on, with the sun under 8° (dusk, night) | *head-on* (looking into the lights), *front quarter* |
 | Doors | a door or the canopy opens while parked (`door_open_ratio`, `canopy_open_ratio`) | *cabin door* (beside the forward fuselage, left side) |
 | Pushback | rolling backwards for a second | *from the ramp* (high, ahead and to the side) |
