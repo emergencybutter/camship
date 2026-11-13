@@ -245,6 +245,17 @@ impl Director {
         self.pending = None;
     }
 
+    /// The world origin moved by `d` (new = old - d): shifts every world
+    /// position the director keeps, so the take carries on seamlessly. For
+    /// hosts whose local frame is re-centred on the aircraft as it travels.
+    pub fn shift_origin(&mut self, d: Vec3) {
+        if let Some(take) = &mut self.take {
+            take.anchor = take.anchor.map(|a| a - d);
+            take.pass = take.pass.map(|p| p - d);
+        }
+        self.aim.shift(d);
+    }
+
     /// What happened since the last call, for the log.
     pub fn take_notes(&mut self) -> Vec<String> {
         std::mem::take(&mut self.notes)

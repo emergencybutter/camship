@@ -8,11 +8,18 @@ Download `Camship-vX.Y.Z.zip` from the [latest release](https://github.com/emerg
 
 **Updating through [SkunkCrafts Updater](https://forums.x-plane.org/forums/topic/292710-20250206-skunkcrafts-updater-standalone-client-v32d-available/) is recommended.** The plugin folder includes a `skunkcrafts_updater.cfg`, so the updater picks up Camship on its own and fetches each new release. Without it, quit X-Plane and replace the `Camship` folder. Your settings are kept either way.
 
+### Microsoft Flight Simulator 2024 (experimental)
+
+`Camship-MSFS-vX.Y.Z.zip` on the same release page holds `Camship.exe`, a small Windows app with the same director and the same window. Run it before or after MSFS 2024: it connects over SimConnect by itself (named pipe, no SDK or `SimConnect.dll` needed) and drives the sim's camera through the SimConnect Camera API, which Microsoft/Asobo still mark as beta. Its settings, `camship-msfs.ini` and `Log.txt` are in `%APPDATA%\Camship`. See [`packaging/README-MSFS.txt`](packaging/README-MSFS.txt).
+
+Differences from X-Plane: MSFS doesn't report engine or wheel positions, so engine close-ups are off and gear shots use a typical layout; the ground clearance only knows the ground height under the aircraft (MSFS's own above-ground camera flag is turned on too); there are no key bindings yet. `camship-msfs.ini` has calibration keys (`pitch_sign`, `bank_sign`, `fov_units`, `position`) in case the beta camera API reads angles, field of view or position differently from what Camship assumes.
+
 ### Building from source
 
 ```
 cargo xtask dist                                # builds dist/Camship/64/win.xpl (or lin/mac)
 cargo xtask dist --install "D:\X-Plane 12"      # also copies it into Resources/plugins
+cargo xtask msfs                                # builds dist/Camship-MSFS/Camship.exe
 ```
 
 CI builds Windows, Linux and a universal (Intel + Apple Silicon) macOS binary on every push. Pushing a `vX.Y.Z` tag attaches the all-platform zip to a GitHub release and publishes it to the `skunkcrafts` branch, which the updater reads.
@@ -145,7 +152,15 @@ crates/plugin    camship (cdylib → win/lin/mac.xpl)
   view.rs        the Camship window's content (plain egui code)
   app.rs         state machine: Off → Starting (switch to chase view) → Running
   lib.rs         XPlugin* entry points, camera/menu/command callbacks
-xtask            `cargo xtask dist` packaging/installing
+crates/msfs      camship-msfs (Camship.exe for MSFS 2024)
+  simconnect.rs  SimConnect wire protocol client: no SDK, named pipe or TCP
+  sim.rs         the simulation variables read, mapped to the director's Subject
+  geo.rs         lat/lon <-> local frame (re-centred every 5 km), MSFS angle
+                 conventions, sun position from the sim's UTC time
+  worker.rs      connect/reconnect, acquire/release the camera, one director
+                 step and one CameraSet per MSFS frame
+  main.rs        eframe window reusing the plugin's view.rs
+xtask            `cargo xtask dist` / `cargo xtask msfs` packaging/installing
 ```
 
 Camship takes the camera with `XPLMControlCamera(xplm_ControlCameraUntilViewChanges)` one frame after it switches to `sim/view/chase`. This makes X-Plane draw the exterior model, and any view key the user presses hands control back cleanly. Every callback catches panics. If the camera callback panics, it gives the camera back to X-Plane.

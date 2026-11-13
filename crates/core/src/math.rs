@@ -138,6 +138,17 @@ impl Attitude {
         Vec3::new(b.x * ch + b.z * sh, b.y, -b.x * sh + b.z * ch)
     }
 
+    /// World-frame vector to body frame: the inverse of `rotate`.
+    pub fn unrotate(self, v: Vec3) -> Vec3 {
+        // `rotate` is orthonormal, so its inverse is its transpose: the body
+        // components are the projections on the rotated body axes.
+        Vec3::new(
+            v.dot(self.rotate(Vec3::new(1.0, 0.0, 0.0))),
+            v.dot(self.rotate(Vec3::new(0.0, 1.0, 0.0))),
+            v.dot(self.rotate(Vec3::new(0.0, 0.0, 1.0))),
+        )
+    }
+
     /// Same heading, wings level, nose on the horizon.
     pub fn level(self) -> Self {
         Self::new(self.heading, 0.0, 0.0)
@@ -208,6 +219,11 @@ impl Spring3 {
         self.ready
     }
 
+    /// The frame moved by `d` (new = old - d).
+    pub fn shift(&mut self, d: Vec3) {
+        self.pos = self.pos - d;
+    }
+
     pub fn snap(&mut self, target: Vec3) {
         self.pos = target;
         self.vel = Vec3::ZERO;
@@ -269,6 +285,14 @@ mod tests {
 
     fn close(a: Vec3, b: Vec3) -> bool {
         (a - b).len() < 1e-9
+    }
+
+    #[test]
+    fn unrotate_inverts_rotate() {
+        let att = Attitude::new(237.0, 12.0, -31.0);
+        let v = Vec3::new(3.0, -2.0, 7.5);
+        assert!(close(att.unrotate(att.rotate(v)), v));
+        assert!(close(att.rotate(att.unrotate(v)), v));
     }
 
     #[test]

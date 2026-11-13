@@ -1,9 +1,14 @@
-//! Build helper: `cargo xtask dist [--target <triple>]... [--install <X-Plane folder>]`.
+//! Build helper: `cargo xtask dist [--target <triple>]... [--install <X-Plane folder>]`
+//! for the X-Plane plugin, and `cargo xtask msfs [--target <triple>]` for the
+//! MSFS 2024 app.
 //!
 //! Builds the plugin in release mode and lays it out the way X-Plane expects:
 //! `dist/Camship/64/{win,lin,mac}.xpl`. Passing two macOS targets produces a
 //! universal `mac.xpl` with `lipo`. With `--install`, the folder is also
 //! copied to `<X-Plane>/Resources/plugins/Camship`.
+//!
+//! `msfs` builds `camship-msfs` and lays it out as
+//! `dist/Camship-MSFS/{Camship.exe,README.txt,LICENSE.txt}`.
 
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
@@ -15,7 +20,8 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("dist") => dist(&args[1..]),
-        _ => Err("usage: cargo xtask dist [--target <triple>]... [--install <X-Plane folder>]".into()),
+        Some("msfs") => msfs(&args[1..]),
+        _ => Err("usage: cargo xtask dist [--target <triple>]... [--install <X-Plane folder>]\n       cargo xtask msfs [--target <triple>]".into()),
     };
     if let Err(e) = result {
         eprintln!("xtask: {e}");
@@ -108,6 +114,42 @@ fn dist(args: &[String]) -> Result<(), String> {
         }
         println!("installed to {} (restart X-Plane to load it)", target.display());
     }
+    Ok(())
+}
+
+fn msfs(args: &[String]) -> Result<(), String> {
+    let mut target: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--target" => target = Some(it.next().ok_or("--target needs a value")?.clone()),
+            other => return Err(format!("unknown argument {other}")),
+        }
+    }
+    let windows = target.as_deref().map_or(cfg!(windows), |t| os_of(t) == "windows");
+    let exe = if windows { "camship-msfs.exe" } else { "camship-msfs" };
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    let mut cargo = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cargo.current_dir(&root).args(["build", "--release", "-p", "camship-msfs"]);
+    if let Some(t) = &target {
+        cargo.args(["--target", t]);
+    }
+    if !cargo.status().map_err(|e| e.to_string())?.success() {
+        return Err("cargo build failed".into());
+    }
+    let built = match &target {
+        Some(t) => root.join("target").join(t).join("release").join(exe),
+        None => root.join("target").join("release").join(exe),
+    };
+
+    let out_dir = root.join("dist").join("Camship-MSFS");
+    fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let out = out_dir.join(if windows { "Camship.exe" } else { "camship" });
+    fs::copy(&built, &out).map_err(|e| format!("copy {}: {e}", built.display()))?;
+    fs::copy(root.join("packaging").join("README-MSFS.txt"), out_dir.join("README.txt")).map_err(|e| e.to_string())?;
+    fs::copy(root.join("LICENSE"), out_dir.join("LICENSE.txt")).map_err(|e| e.to_string())?;
+    println!("built {}", out.display());
     Ok(())
 }
 

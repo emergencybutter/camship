@@ -19,7 +19,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p camship-core
+      - run: cargo test -p camship-core -p camship-msfs
       - run: cargo clippy --workspace --release -- -D warnings
 
   build:
@@ -78,8 +78,25 @@ jobs:
           path: dist/Camship/64/${{ matrix.name }}.xpl
           if-no-files-found: error
 
+  msfs:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msfs
+      - name: Build the MSFS 2024 app
+        shell: bash
+        run: cargo xtask msfs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Camship-MSFS
+          path: dist/Camship-MSFS
+          if-no-files-found: error
+
   bundle:
-    needs: [test, build]
+    needs: [test, build, msfs]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -113,8 +130,10 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cp Camship.zip "Camship-$TAG.zip"
+          cp -r artifacts/Camship-MSFS Camship-MSFS
+          zip -r "Camship-MSFS-$TAG.zip" Camship-MSFS
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Camship $TAG" --generate-notes
-          gh release upload "$TAG" "Camship-$TAG.zip" --clobber
+          gh release upload "$TAG" "Camship-$TAG.zip" "Camship-MSFS-$TAG.zip" --clobber
       # SkunkCrafts Updater reads the plugin folder plus its file lists from the
       # `skunkcrafts` branch (see packaging/skunkcrafts_updater.cfg). Only stable
       # tags are published there: anything with a "-" (v1.0.0-beta1) is skipped.
